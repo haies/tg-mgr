@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram 频道 - $channel_name</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #e5ddd5;
+            background-image: url("data:image/svg+xml,%3Csvg width='400' height='400' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h400v400H0z' fill='%23e5ddd5'/%3E%3Cpath d='M0 200h200V0h200v200H0v200h200V200' stroke='%23d1c7bc' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+            line-height: 1.5;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .header {
+            background: #5682a3;
+            color: white;
+            padding: 15px 20px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        
+        .header h1 {
+            font-size: 18px;
+            font-weight: 500;
+            margin: 0;
+        }
+        
+        .header .info {
+            font-size: 13px;
+            opacity: 0.8;
+            margin-top: 3px;
+        }
+        
+        .messages-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .date-divider {
+            text-align: center;
+            margin: 20px 0;
+            position: relative;
+        }
+        
+        .date-divider::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: rgba(0,0,0,0.1);
+        }
+        
+        .date-divider span {
+            background: rgba(255,255,255,0.6);
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 12px;
+            color: #666;
+            position: relative;
+        }
+        
+        .message {
+            display: flex;
+            margin-bottom: 8px;
+            position: relative;
+        }
+        
+        .message-bubble {
+            background: white;
+            border-radius: 8px 8px 8px 0;
+            padding: 8px 12px;
+            max-width: 70%;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+            position: relative;
+            word-wrap: break-word;
+        }
+        
+        .message.own .message-bubble {
+            background: #e3ffd4;
+            border-radius: 8px 8px 0 8px;
+            margin-left: auto;
+        }
+        
+        .message-sender {
+            font-size: 13px;
+            color: #5682a3;
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+        
+        .message-text {
+            font-size: 14px;
+            color: #222;
+            line-height: 1.4;
+        }
+        
+        .message-text a {
+            color: #168acd;
+            text-decoration: none;
+        }
+        
+        .message-text a:hover {
+            text-decoration: underline;
+        }
+        
+        .message-media {
+            margin: 5px -2px;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .message-media img {
+            max-width: 100%;
+            display: block;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        .message-media video {
+            max-width: 100%;
+            display: block;
+            border-radius: 6px;
+        }
+        
+        .message-media .file-attachment {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .message-media .file-icon {
+            font-size: 32px;
+        }
+        
+        .message-media .file-info {
+            flex: 1;
+        }
+        
+        .message-media .file-name {
+            font-size: 14px;
+            color: #222;
+            word-break: break-all;
+        }
+        
+        .message-media .file-size {
+            font-size: 12px;
+            color: #888;
+        }
+        
+        .message-time {
+            font-size: 11px;
+            color: #999;
+            text-align: right;
+            margin-top: 4px;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .message-time a {
+            color: #999;
+            text-decoration: none;
+        }
+        
+        .message-time a:hover {
+            color: #5682a3;
+        }
+        
+        .service-message {
+            text-align: center;
+            margin: 15px 0;
+            font-size: 13px;
+            color: #888;
+        }
+        
+        .lightbox {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.95);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .lightbox.active {
+            display: flex;
+        }
+        
+        .lightbox img,
+        .lightbox video {
+            max-width: 90%;
+            max-height: 90%;
+        }
+        
+        .lightbox-close {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+        }
+        
+        .forward-info {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 4px;
+            padding-left: 15px;
+            position: relative;
+        }
+        
+        .forward-info::before {
+            content: '↩';
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        
+        @media (max-width: 600px) {
+            .messages-container {
+                padding: 10px;
+            }
+            
+            .message-bubble {
+                max-width: 85%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>$channel_name</h1>
+        <div class="info">$message_count 条消息 | 导出时间: $export_time</div>
+    </div>
+    
+    <div class="messages-container">
+        $messages_html
+    </div>
+    
+    <div class="lightbox" id="lightbox">
+        <span class="lightbox-close" onclick="closeLightbox()">&times;</span>
+        <div id="lightbox-content"></div>
+    </div>
+    
+    <script>
+        function openLightbox(src, isVideo = false) {
+            const lightbox = document.getElementById('lightbox');
+            const content = document.getElementById('lightbox-content');
+            
+            if (isVideo) {
+                content.innerHTML = '<video src="' + src + '" controls autoplay style="max-width:90%;max-height:90%;"></video>';
+            } else {
+                content.innerHTML = '<img src="' + src + '" style="max-width:90%;max-height:90%;">';
+            }
+            
+            lightbox.classList.add('active');
+        }
+        
+        function closeLightbox() {
+            document.getElementById('lightbox').classList.remove('active');
+        }
+        
+        document.getElementById('lightbox').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeLightbox();
+            }
+        });
+        
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeLightbox();
+            }
+        });
+    </script>
+</body>
+</html>

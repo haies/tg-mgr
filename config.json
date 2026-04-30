@@ -1,0 +1,16 @@
+{
+  "forward_limit": 10,
+  "reaction_limit": 10,
+  "download_dir": "~/Downloads/Telegram",
+  "max_retries": 5,
+  "retry_delay_base": 1,
+  "media_types": [
+    "photo",
+    "video",
+    "document",
+    "audio",
+    "animation",
+    "text",
+    "video_note"
+  ]
+}

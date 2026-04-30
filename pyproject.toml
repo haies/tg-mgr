@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-mgr"
+version = "0.1.0"
+description = "Telegram 频道管理工具"
+requires-python = ">=3.13"
+dependencies = [
+    "pyrogram>=2.0.106",
+    "python-dotenv>=1.0.0",
+    "ffmpeg-python>=0.2.0",
+    "tgcrypto>=1.2.0",
+]
+
+[project.scripts]
+tg = "tg_mgr:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]  # line-length handled by formatter
