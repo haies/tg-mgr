@@ -8,11 +8,12 @@
 使用：
 - ./tg forward <源频道ID1> [<源频道ID2> ...] [-o <目标频道ID>] [-c]
 """
+
 import logging
 import sqlite3
 import sys
 import time
-from typing import Any, Optional
+from typing import Any
 
 from pyrogram import Client, errors
 
@@ -77,7 +78,7 @@ def join_channel(client: Client, channel_id: int) -> bool:
 
     try:
         chat = client.get_chat(channel_id)
-        if hasattr(chat, 'username') and chat.username:
+        if hasattr(chat, "username") and chat.username:
             invite_link = f"https://t.me/{chat.username}"
             client.join_chat(invite_link)
             print(f"[FORWARD] 已通过链接加入频道 {channel_id}")
@@ -101,7 +102,7 @@ def is_channel_forwarding_allowed(client: Client, channel_id: int) -> bool:
     try:
         chat = client.get_chat(channel_id)
         # 检查是否启用保护内容（禁止转发）
-        if hasattr(chat, 'has_protected_content') and chat.has_protected_content:
+        if hasattr(chat, "has_protected_content") and chat.has_protected_content:
             return False
         return True
     except errors.BadRequest as e:
@@ -114,7 +115,9 @@ def is_channel_forwarding_allowed(client: Client, channel_id: int) -> bool:
         return False
 
 
-def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int], check_exists: bool = False) -> None:
+def forward_messages(
+    source_channel_ids: list[int], target_channel_ids: list[int], check_exists: bool = False
+) -> None:
     """转发高反应消息到目标频道
 
     Args:
@@ -124,10 +127,10 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
     """
     from datetime import datetime
 
-    log_file = get_log_path('forward.log')
+    log_file = get_log_path("forward.log")
 
     # 记录日期（只在文件不存在或今天首次运行时）
-    today = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_date = False
     if not log_file.exists():
         write_date = True
@@ -148,7 +151,7 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
 
         # 先检查频道是否允许转发
         print(f"[FORWARD] 检查频道 {source_channel_id} 是否允许转发...")
-        with get_client('tg-mgr') as client:
+        with get_client("tg-mgr") as client:
             if not is_channel_forwarding_allowed(client, source_channel_id):
                 print(f"[FORWARD] 频道 {source_channel_id} 禁止转发，跳过该频道")
                 continue
@@ -157,14 +160,27 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
         # 同步数据
         print(f"[FORWARD] 正在同步频道 {source_channel_id} 的数据...")
 
-        # 删除旧数据库
-        db_path = get_database_path()
-        if db_path.exists():
-            db_path.unlink()
+        # 先同步到临时数据库，确认成功后再切换
+        temp_db_path = get_database_path().with_suffix(".tmp.db")
 
-        # 同步
-        from modules.clean import run_sync as sync_channel
-        sync_channel(channel_id=str(source_channel_id))
+        # 同步（使用临时路径）
+        import os
+
+        original_db_path = get_database_path()
+        os.environ["TG_MGR_DB_PATH"] = str(temp_db_path)
+
+        from modules.sync import sync_channel
+
+        try:
+            sync_channel(channel_id=str(source_channel_id))
+        finally:
+            os.environ.pop("TG_MGR_DB_PATH", None)
+
+        # 同步成功后，替换旧数据库
+        if temp_db_path.exists():
+            if original_db_path.exists():
+                original_db_path.unlink()
+            temp_db_path.rename(original_db_path)
 
         conn = get_db_connection()
 
@@ -187,7 +203,7 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
         skipped_count = 0
         failed_count = 0
 
-        with get_client('tg-mgr') as client:
+        with get_client("tg-mgr") as client:
             # 尝试加入未加入的频道
             for target_id in target_channel_ids:
                 try:
@@ -206,8 +222,8 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
                 print(f"\n[FORWARD] 开始处理目标频道: {target_id}")
 
                 for msg in messages:
-                    msg_id = msg['message_id']
-                    total = msg['total']
+                    msg_id = msg["message_id"]
+                    total = msg["total"]
                     link = f"{get_channel_address(source_channel_id)}/{msg_id}"
 
                     # 如果启用检查模式，先检查目标频道是否已存在该消息
@@ -221,19 +237,19 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
                     try:
                         # 通过转发方式发送消息
                         client.copy_message(
-                            chat_id=target_id,
-                            from_chat_id=source_channel_id,
-                            message_id=msg_id
+                            chat_id=target_id, from_chat_id=source_channel_id, message_id=msg_id
                         )
                         forwarded_count += 1
-                        print(f"[FORWARD] #{forwarded_count} 复制成功: {link} -> {target_id} (总计: {total})")
+                        print(
+                            f"[FORWARD] #{forwarded_count} 复制成功: {link} -> {target_id} (总计: {total})"
+                        )
 
                         # 写入日志
                         if write_date:
-                            with open(log_file, 'w') as f:
+                            with open(log_file, "w") as f:
                                 f.write(f"{today}\n")
                             write_date = False
-                        with open(log_file, 'a') as f:
+                        with open(log_file, "a") as f:
                             f.write(f"{link}\n")
                     except errors.Forbidden:
                         print(f"[FORWARD] 频道 {target_id} 禁止复制，跳过该频道")
@@ -257,23 +273,25 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
                                 client.copy_message(
                                     chat_id=target_id,
                                     from_chat_id=source_channel_id,
-                                    message_id=msg_id
+                                    message_id=msg_id,
                                 )
                                 forwarded_count += 1
-                                print(f"[FORWARD] #{forwarded_count} 复制成功: {link} -> {target_id} (总计: {total})")
+                                print(
+                                    f"[FORWARD] #{forwarded_count} 复制成功: {link} -> {target_id} (总计: {total})"
+                                )
 
                                 # 写入日志
                                 if write_date:
-                                    with open(log_file, 'w') as f:
+                                    with open(log_file, "w") as f:
                                         f.write(f"{today}\n")
                                     write_date = False
-                                with open(log_file, 'a') as f:
+                                with open(log_file, "a") as f:
                                     f.write(f"{link}\n")
                                 retry_success = True
                                 break
                             except errors.FloodWait as e2:
                                 wait = e2.value if e2.value > 5 else 5
-                                print(f"[FORWARD] FloodWait重试 {retry+1}/3: 等待 {wait} 秒...")
+                                print(f"[FORWARD] FloodWait重试 {retry + 1}/3: 等待 {wait} 秒...")
                                 time.sleep(wait)
                             except errors.Forbidden:
                                 print(f"[FORWARD] 频道 {target_id} 禁止复制，跳过该频道")
@@ -309,22 +327,28 @@ def forward_messages(source_channel_ids: list[int], target_channel_ids: list[int
         total_failed += failed_count
 
     print("\n[FORWARD] ========== 全部完成 ==========")
-    print(f"[FORWARD] 总计: 成功 {total_forwarded} 条, 跳过 {total_skipped} 条, 失败 {total_failed} 条")
+    print(
+        f"[FORWARD] 总计: 成功 {total_forwarded} 条, 跳过 {total_skipped} 条, 失败 {total_failed} 条"
+    )
 
 
 def main():
     """主执行流程"""
     import argparse
 
-    parser = argparse.ArgumentParser(description='高反应消息转发模块')
-    parser.add_argument('source_channels', nargs='+', type=int, help='源频道ID（1个或多个）')
-    parser.add_argument('-o', '--target', type=int, help='目标频道ID（不指定则使用config.json中的ID）')
-    parser.add_argument('-c', '--check', action='store_true', help='转发前检查目标频道是否已存在该消息')
+    parser = argparse.ArgumentParser(description="高反应消息转发模块")
+    parser.add_argument("source_channels", nargs="+", type=int, help="源频道ID（1个或多个）")
+    parser.add_argument(
+        "-o", "--target", type=int, help="目标频道ID（不指定则使用config.json中的ID）"
+    )
+    parser.add_argument(
+        "-c", "--check", action="store_true", help="转发前检查目标频道是否已存在该消息"
+    )
 
     args = parser.parse_args()
 
     config = get_config()
-    target_channel_id = args.target if args.target else config.get('channel_id')
+    target_channel_id = args.target if args.target else config.get("channel_id")
 
     if not target_channel_id:
         print("[ERROR] 未指定目标频道，且config.json中未配置channel_id")

@@ -1,6 +1,7 @@
 """
 tg-mgr - Telegram 频道管理工具入口
 """
+
 import sys
 from pathlib import Path
 
@@ -22,7 +23,7 @@ _LAZY_IMPORTS = {
     "sessions": ("tg_mgr", "sessions"),
 }
 
-_modules_cache = {}
+_modules_cache: dict = {}
 
 
 def _get_module(name):
@@ -34,7 +35,9 @@ def _get_module(name):
         if package == "modules":
             _modules_cache[name] = __import__(f"{package}.{module_name}", fromlist=[module_name])
         else:
-            _modules_cache[name] = __import__(f"tg_mgr.{module_name}", fromlist=[module_name]).__getattribute__(module_name)
+            _modules_cache[name] = __import__(
+                f"tg_mgr.{module_name}", fromlist=[module_name]
+            ).__getattribute__(module_name)
     return _modules_cache[name]
 
 
@@ -43,6 +46,7 @@ MODULES = {name: None for name in _LAZY_IMPORTS}
 
 class _ModuleProxy:
     """Proxy object that lazy-loads the actual module on first attribute access."""
+
     def __init__(self, name):
         self._name = name
 

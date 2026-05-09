@@ -20,6 +20,7 @@
 - voice/: 下载的语音消息
 - stickers/: 下载的表情包
 """
+
 import argparse
 import json
 import logging
@@ -53,14 +54,9 @@ def parse_export_args(args: list) -> argparse.Namespace:
         Namespace包含 channel_ids 和 message_ids
     """
     parser = argparse.ArgumentParser(
-        description='Telegram 频道导出工具',
-        usage='./tg export [channel_id|message_url]...'
+        description="Telegram 频道导出工具", usage="./tg export [channel_id|message_url]..."
     )
-    parser.add_argument(
-        'channels',
-        nargs='*',
-        help='频道ID或消息地址，多个输入用空格分隔'
-    )
+    parser.add_argument("channels", nargs="*", help="频道ID或消息地址，多个输入用空格分隔")
 
     parsed = parser.parse_args(args)
 
@@ -69,20 +65,20 @@ def parse_export_args(args: list) -> argparse.Namespace:
 
     for input_str in parsed.channels:
         # 判断是消息地址还是频道ID
-        if input_str.startswith('https://t.me/c/') or input_str.startswith('http://t.me/c/'):
+        if input_str.startswith("https://t.me/c/") or input_str.startswith("http://t.me/c/"):
             # 解析消息地址: https://t.me/c/{channel_id}/{message_id}
             # 注意：t.me/c/{chat_id} 中的 chat_id 需要加上 -100 前缀才是完整的频道 ID
-            match = re.match(r'https?://t\.me/c/(\d+)/(\d+)', input_str)
+            match = re.match(r"https?://t\.me/c/(\d+)/(\d+)", input_str)
             if match:
                 channel_ids.append(f"-100{match.group(1)}")
                 message_ids.append(int(match.group(2)))
             else:
                 # 地址格式不正确，作为频道ID处理
                 channel_ids.append(input_str)
-        elif input_str.startswith('-100'):
+        elif input_str.startswith("-100"):
             # 带-100前缀的频道ID
             channel_ids.append(input_str)
-        elif input_str.lstrip('-').isdigit():
+        elif input_str.lstrip("-").isdigit():
             # 纯数字频道ID（可能带负号）
             channel_ids.append(input_str)
         else:
@@ -92,7 +88,7 @@ def parse_export_args(args: list) -> argparse.Namespace:
     # 如果没有传入参数，使用配置文件中的默认频道
     if not channel_ids:
         config = get_config()
-        default_channel = config.get('channel_id')
+        default_channel = config.get("channel_id")
         if default_channel:
             channel_ids = [str(default_channel)]
 
@@ -104,84 +100,82 @@ class ExportState:
     """管理导出状态，支持断点续传"""
 
     def __init__(self, export_dir: Path):
-        self.state_file = export_dir / 'export_state.json'
+        self.state_file = export_dir / "export_state.json"
         self.state = self._load_state()
 
     def _load_state(self) -> dict:
         """加载状态文件"""
         if self.state_file.exists():
             try:
-                with open(self.state_file, encoding='utf-8') as f:
+                with open(self.state_file, encoding="utf-8") as f:
                     return json.load(f)
             except (json.JSONDecodeError, ValueError, OSError) as e:
                 logger.warning(f"加载状态文件失败: {e}")
         return {
-            'processed_messages': [],  # 已处理的消息ID列表
-            'downloaded_files': {},    # 已下载的文件 {file_unique_id: file_path}
-            'last_update': None
+            "processed_messages": [],  # 已处理的消息ID列表
+            "downloaded_files": {},  # 已下载的文件 {file_unique_id: file_path}
+            "last_update": None,
         }
 
     def save(self):
         """保存状态到文件"""
-        self.state['last_update'] = datetime.now().isoformat()
-        with open(self.state_file, 'w', encoding='utf-8') as f:
+        self.state["last_update"] = datetime.now().isoformat()
+        with open(self.state_file, "w", encoding="utf-8") as f:
             json.dump(self.state, f, ensure_ascii=False, indent=2)
 
     def is_message_processed(self, message_id: int) -> bool:
         """检查消息是否已处理"""
-        return message_id in self.state['processed_messages']
+        return message_id in self.state["processed_messages"]
 
     def mark_message_processed(self, message_id: int):
         """标记消息已处理"""
-        if message_id not in self.state['processed_messages']:
-            self.state['processed_messages'].append(message_id)
+        if message_id not in self.state["processed_messages"]:
+            self.state["processed_messages"].append(message_id)
 
     def is_file_downloaded(self, file_unique_id: str) -> str | None:
         """检查文件是否已下载，返回文件路径或 None"""
-        return self.state['downloaded_files'].get(file_unique_id)
+        return self.state["downloaded_files"].get(file_unique_id)
 
     def mark_file_downloaded(self, file_unique_id: str, file_path: str):
         """标记文件已下载"""
-        self.state['downloaded_files'][file_unique_id] = file_path
+        self.state["downloaded_files"][file_unique_id] = file_path
 
 
 # ============ HTML 模板加载 ============
 def load_html_template() -> str:
     """加载 HTML 模板文件"""
-    template_path = Path(__file__).parent / 'export.template.html'
+    template_path = Path(__file__).parent / "export.template.html"
     if not template_path.exists():
         raise FileNotFoundError(f"HTML 模板文件不存在: {template_path}")
-    with open(template_path, encoding='utf-8') as f:
+    with open(template_path, encoding="utf-8") as f:
         return f.read()
 
 
 # ============ Telegram Desktop 格式 JSON 导出 ============
 def export_json_telegram_desktop_format(
-    messages: list[dict],
-    channel_info: dict,
-    output_path: Path
+    messages: list[dict], channel_info: dict, output_path: Path
 ):
     """
     导出为 Telegram Desktop 格式的 JSON
     """
     export_data = {
         "about": "Here is the data you requested. "
-                 "Telegram Desktop exports data in a machine-readable JSON format, "
-                 "which may be used by third-party apps to analyze your data.",
+        "Telegram Desktop exports data in a machine-readable JSON format, "
+        "which may be used by third-party apps to analyze your data.",
         "chats": {
             "about": "This page lists all chats from this export.",
             "list": [
                 {
-                    "name": channel_info.get('title', 'Unknown'),
+                    "name": channel_info.get("title", "Unknown"),
                     "type": "channel",
-                    "id": channel_info.get('id', 0),
-                    "messages": messages
+                    "id": channel_info.get("id", 0),
+                    "messages": messages,
                 }
-            ]
-        }
+            ],
+        },
     }
 
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(export_data, f, ensure_ascii=False, indent=2)
 
     print(f"[EXPORT] JSON 已导出至: {output_path}")
@@ -193,13 +187,13 @@ def format_timestamp(ts: str) -> tuple[str, str]:
     if isinstance(ts, datetime):
         dt = ts
     else:
-        dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
-    return dt.strftime('%Y-%m-%d'), dt.strftime('%H:%M')
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")
 
 
 def generate_message_html(msg: dict, prev_date: str | None) -> tuple[str, str | None]:
     """生成单条消息的 HTML"""
-    date_str, time_str = format_timestamp(msg.get('date', datetime.now()))
+    date_str, time_str = format_timestamp(msg.get("date", datetime.now()))
 
     html_parts = []
 
@@ -212,31 +206,31 @@ def generate_message_html(msg: dict, prev_date: str | None) -> tuple[str, str | 
     html_parts.append('<div class="message-bubble">')
 
     # 转发信息
-    if msg.get('forwarded_from'):
+    if msg.get("forwarded_from"):
         html_parts.append(f'<div class="forward-info">转发自 {msg["forwarded_from"]}</div>')
 
     # 发送者（如果有）
-    if msg.get('from') and msg.get('from') != 'Channel':
+    if msg.get("from") and msg.get("from") != "Channel":
         html_parts.append(f'<div class="message-sender">{msg["from"]}</div>')
 
     # 媒体
-    if msg.get('photo'):
+    if msg.get("photo"):
         html_parts.append(f'''
         <div class="message-media">
             <img src="{msg["photo"]}" alt="Photo" onclick="openLightbox('{msg["photo"]}')">
         </div>
         ''')
-    elif msg.get('video'):
+    elif msg.get("video"):
         html_parts.append(f'''
         <div class="message-media">
             <video src="{msg["video"]}" controls preload="metadata"></video>
         </div>
         ''')
-    elif msg.get('file'):
-        file_info = msg.get('file_info', {})
-        file_name = file_info.get('name', '文件')
-        file_size = file_info.get('size_formatted', '')
-        html_parts.append(f'''
+    elif msg.get("file"):
+        file_info = msg.get("file_info", {})
+        file_name = file_info.get("name", "文件")
+        file_size = file_info.get("size_formatted", "")
+        html_parts.append(f"""
         <div class="message-media">
             <div class="file-attachment">
                 <div class="file-icon">📄</div>
@@ -246,17 +240,17 @@ def generate_message_html(msg: dict, prev_date: str | None) -> tuple[str, str | 
                 </div>
             </div>
         </div>
-        ''')
+        """)
 
     # 文本内容
-    if msg.get('text'):
+    if msg.get("text"):
         # 处理链接
-        text = msg['text']
-        text = text.replace('\n', '<br>')
+        text = msg["text"]
+        text = text.replace("\n", "<br>")
         html_parts.append(f'<div class="message-text">{text}</div>')
 
     # 时间和链接
-    tg_link = generate_tg_link(msg.get('channel_id', ''), msg.get('id', 0))
+    tg_link = generate_tg_link(msg.get("channel_id", ""), msg.get("id", 0))
     html_parts.append(f'''
     <div class="message-time">
         <a href="{tg_link}" target="_blank">#{msg.get("id", "")}</a>
@@ -264,16 +258,12 @@ def generate_message_html(msg: dict, prev_date: str | None) -> tuple[str, str | 
     </div>
     ''')
 
-    html_parts.append('</div></div>')
+    html_parts.append("</div></div>")
 
-    return '\n'.join(html_parts), date_str
+    return "\n".join(html_parts), date_str
 
 
-def export_html_telegram_desktop_style(
-    messages: list[dict],
-    channel_info: dict,
-    output_path: Path
-):
+def export_html_telegram_desktop_style(messages: list[dict], channel_info: dict, output_path: Path):
     """导出为 Telegram Desktop 风格的 HTML"""
 
     # 加载模板
@@ -288,14 +278,15 @@ def export_html_telegram_desktop_style(
 
     # 使用 string.Template 避免 CSS 花括号转义问题
     from string import Template
+
     html_content = Template(html_template).substitute(
-        channel_name=channel_info.get('title', 'Unknown Channel'),
+        channel_name=channel_info.get("title", "Unknown Channel"),
         message_count=len(messages),
-        export_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        messages_html='\n'.join(messages_html_parts)
+        export_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        messages_html="\n".join(messages_html_parts),
     )
 
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
     print(f"[EXPORT] HTML 已导出至: {output_path}")
@@ -303,11 +294,7 @@ def export_html_telegram_desktop_style(
 
 # ============ 媒体下载（直接使用 Message 对象） ============
 def download_media_from_message(
-    client: Client,
-    message: types.Message,
-    media_type: str,
-    export_dir: Path,
-    state: ExportState
+    client: Client, message: types.Message, media_type: str, export_dir: Path, state: ExportState
 ) -> str | None:
     """
     直接从 Message 对象下载媒体文件，使用 Message 对象包含的 access_hash
@@ -323,25 +310,25 @@ def download_media_from_message(
 
     if message.photo:
         file_unique_id = message.photo.file_unique_id
-        media_type = 'photos'
+        media_type = "photos"
     elif message.video:
         file_unique_id = message.video.file_unique_id
-        media_type = 'videos'
+        media_type = "videos"
     elif message.document:
         file_unique_id = message.document.file_unique_id
-        media_type = 'files'
+        media_type = "files"
     elif message.audio:
         file_unique_id = message.audio.file_unique_id
-        media_type = 'files'
+        media_type = "files"
     elif message.voice:
         file_unique_id = message.voice.file_unique_id
-        media_type = 'voice'
+        media_type = "voice"
     elif message.video_note:
         file_unique_id = message.video_note.file_unique_id
-        media_type = 'video_notes'
+        media_type = "video_notes"
     elif message.sticker:
         file_unique_id = message.sticker.file_unique_id
-        media_type = 'stickers'
+        media_type = "stickers"
     else:
         return None  # 非媒体消息
 
@@ -358,17 +345,17 @@ def download_media_from_message(
     media_dir.mkdir(exist_ok=True)
 
     # 生成文件名
-    file_ext = '.jpg'  # 默认扩展名
+    file_ext = ".jpg"  # 默认扩展名
     if message.video or message.video_note:
-        file_ext = '.mp4'
+        file_ext = ".mp4"
     elif message.document and message.document.file_name:
-        file_ext = Path(message.document.file_name).suffix or '.bin'
+        file_ext = Path(message.document.file_name).suffix or ".bin"
     elif message.audio:
-        file_ext = '.mp3'
+        file_ext = ".mp3"
     elif message.voice:
-        file_ext = '.ogg'
+        file_ext = ".ogg"
     elif message.sticker:
-        file_ext = '.webp'
+        file_ext = ".webp"
 
     filename = f"{media_type}_{message.id}{file_ext}"
     save_path = media_dir / filename
@@ -382,7 +369,7 @@ def download_media_from_message(
         # 这样 Pyrogram 会使用 Message 中包含的完整上下文（包括 access_hash）
         downloaded_path = client.download_media(
             message,  # 直接使用 Message 对象
-            file_name=str(save_path)
+            file_name=str(save_path),
         )
 
         if downloaded_path and Path(downloaded_path).exists():
@@ -407,7 +394,7 @@ def download_media_from_message(
 def format_file_size(size_bytes: int) -> str:
     """格式化文件大小"""
     if not size_bytes:
-        return '0 B'
+        return "0 B"
     if size_bytes < 1024:
         return f"{size_bytes} B"
     elif size_bytes < 1024 * 1024:
@@ -419,62 +406,59 @@ def format_file_size(size_bytes: int) -> str:
 
 
 # ============ 消息处理 ============
-def process_message_for_export(
-    message: types.Message,
-    channel_info: dict
-) -> dict:
+def process_message_for_export(message: types.Message, channel_info: dict) -> dict:
     """
     处理单条消息，提取元数据（不下载媒体）
     返回 Telegram Desktop 格式的消息字典
     """
     # 获取消息基本信息
     msg_data = {
-        'id': message.id,
-        'type': 'message',
-        'date': message.date.isoformat() if message.date else datetime.now().isoformat(),
-        'from': message.from_user.first_name if message.from_user else 'Channel',
-        'from_id': message.from_user.id if message.from_user else channel_info['id'],
-        'text': message.caption or message.text or '',
-        'channel_id': channel_info['id']
+        "id": message.id,
+        "type": "message",
+        "date": message.date.isoformat() if message.date else datetime.now().isoformat(),
+        "from": message.from_user.first_name if message.from_user else "Channel",
+        "from_id": message.from_user.id if message.from_user else channel_info["id"],
+        "text": message.caption or message.text or "",
+        "channel_id": channel_info["id"],
     }
 
     # 处理转发信息
     if message.forward_from_chat:
-        msg_data['forwarded_from'] = message.forward_from_chat.title or 'Unknown'
+        msg_data["forwarded_from"] = message.forward_from_chat.title or "Unknown"
     elif message.forward_sender_name:
-        msg_data['forwarded_from'] = message.forward_sender_name
+        msg_data["forwarded_from"] = message.forward_sender_name
 
     # 处理媒体元数据（不下载）
     if message.photo:
-        msg_data['photo'] = True  # 占位，实际路径在下载后填充
+        msg_data["photo"] = True  # 占位，实际路径在下载后填充
     elif message.video:
-        msg_data['video'] = True
-        msg_data['duration'] = message.video.duration or 0
-        msg_data['width'] = message.video.width or 0
-        msg_data['height'] = message.video.height or 0
+        msg_data["video"] = True
+        msg_data["duration"] = message.video.duration or 0
+        msg_data["width"] = message.video.width or 0
+        msg_data["height"] = message.video.height or 0
     elif message.document:
-        msg_data['file'] = True
-        msg_data['file_info'] = {
-            'name': message.document.file_name or f'file_{message.id}',
-            'size': message.document.file_size or 0,
-            'size_formatted': format_file_size(message.document.file_size),
-            'mime_type': message.document.mime_type or 'application/octet-stream'
+        msg_data["file"] = True
+        msg_data["file_info"] = {
+            "name": message.document.file_name or f"file_{message.id}",
+            "size": message.document.file_size or 0,
+            "size_formatted": format_file_size(message.document.file_size),
+            "mime_type": message.document.mime_type or "application/octet-stream",
         }
     elif message.audio:
-        msg_data['file'] = True
-        msg_data['file_info'] = {
-            'name': message.audio.file_name or f'audio_{message.id}.mp3',
-            'size': message.audio.file_size or 0,
-            'size_formatted': format_file_size(message.audio.file_size)
+        msg_data["file"] = True
+        msg_data["file_info"] = {
+            "name": message.audio.file_name or f"audio_{message.id}.mp3",
+            "size": message.audio.file_size or 0,
+            "size_formatted": format_file_size(message.audio.file_size),
         }
     elif message.voice:
-        msg_data['voice'] = True
-        msg_data['duration'] = message.voice.duration or 0
+        msg_data["voice"] = True
+        msg_data["duration"] = message.voice.duration or 0
     elif message.video_note:
-        msg_data['video_note'] = True
-        msg_data['duration'] = message.video_note.duration or 0
+        msg_data["video_note"] = True
+        msg_data["duration"] = message.video_note.duration or 0
     elif message.sticker:
-        msg_data['sticker'] = True
+        msg_data["sticker"] = True
 
     return msg_data
 
@@ -483,24 +467,24 @@ def update_message_with_download_path(msg_data: dict, download_path: str | None)
     """更新消息数据，填充下载后的文件路径"""
     if not download_path:
         # 下载失败，移除占位符
-        for key in ['photo', 'video', 'file', 'voice', 'video_note', 'sticker']:
+        for key in ["photo", "video", "file", "voice", "video_note", "sticker"]:
             if msg_data.get(key):
                 del msg_data[key]
         return msg_data
 
     # 填充实际路径
-    if msg_data.get('photo'):
-        msg_data['photo'] = download_path
-    elif msg_data.get('video'):
-        msg_data['video'] = download_path
-    elif msg_data.get('file'):
-        msg_data['file'] = download_path
-    elif msg_data.get('voice'):
-        msg_data['voice'] = download_path
-    elif msg_data.get('video_note'):
-        msg_data['video_note'] = download_path
-    elif msg_data.get('sticker'):
-        msg_data['sticker'] = download_path
+    if msg_data.get("photo"):
+        msg_data["photo"] = download_path
+    elif msg_data.get("video"):
+        msg_data["video"] = download_path
+    elif msg_data.get("file"):
+        msg_data["file"] = download_path
+    elif msg_data.get("voice"):
+        msg_data["voice"] = download_path
+    elif msg_data.get("video_note"):
+        msg_data["video_note"] = download_path
+    elif msg_data.get("sticker"):
+        msg_data["sticker"] = download_path
 
     return msg_data
 
@@ -532,11 +516,12 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
     """
     # 加载配置
     config = get_config()
-    _channel_id = channel_id if channel_id else config.get('channel_id')
+    _channel_id = channel_id if channel_id else config.get("channel_id")
 
     if not _channel_id:
         print("[ERROR] 未指定频道ID，请在命令行传入或使用 config.json 配置")
         import sys
+
         sys.exit(1)
 
     print(f"[EXPORT] 开始导出频道: {_channel_id}")
@@ -552,10 +537,10 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
         try:
             chat = client.get_chat(_channel_id)
             channel_info = {
-                'id': chat.id,
-                'title': chat.title or 'Unknown Channel',
-                'username': chat.username,
-                'type': chat.type.value if hasattr(chat.type, 'value') else str(chat.type)
+                "id": chat.id,
+                "title": chat.title or "Unknown Channel",
+                "username": chat.username,
+                "type": chat.type.value if hasattr(chat.type, "value") else str(chat.type),
             }
         except errors.PeerIdInvalid as e:
             print(f"[ERROR] 无法访问该频道: {e}")
@@ -565,18 +550,18 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
         print(f"[EXPORT] 频道名称: {channel_info['title']}")
 
         # 确定导出目录
-        base_download_dir = Path(config.get('download_dir', '~/Downloads/Telegram')).expanduser()
+        base_download_dir = Path(config.get("download_dir", "~/Downloads/Telegram")).expanduser()
         base_download_dir.mkdir(parents=True, exist_ok=True)
 
         # 查找已存在的导出目录
-        existing_dir = find_existing_export_dir(base_download_dir, channel_info['title'])
+        existing_dir = find_existing_export_dir(base_download_dir, channel_info["title"])
 
         if existing_dir:
             export_dir = existing_dir
             print(f"[EXPORT] 找到已有导出目录，将继续导出: {export_dir}")
         else:
-            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            safe_title = sanitize_filename(channel_info['title'])
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            safe_title = sanitize_filename(channel_info["title"])
             export_dir = base_download_dir / f"{safe_title}_{timestamp}"
             export_dir.mkdir(parents=True, exist_ok=True)
             print(f"[EXPORT] 创建新导出目录: {export_dir}")
@@ -611,9 +596,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
 
                 # 获取一批消息
                 for message in client.get_chat_history(
-                    _channel_id,
-                    offset_id=offset_id,
-                    limit=batch_size
+                    _channel_id, offset_id=offset_id, limit=batch_size
                 ):
                     batch_messages.append(message)
                     offset_id = message.id
@@ -643,13 +626,24 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
                         download_path = None
                         if message.media:
                             download_path = download_media_from_message(
-                                client, message, '', export_dir, state
+                                client, message, "", export_dir, state
                             )
                             # 更新消息数据，填充下载路径
                             msg_data = update_message_with_download_path(msg_data, download_path)
 
                         # 保存消息数据
-                        if any(msg_data.get(k) for k in ['photo', 'video', 'file', 'voice', 'video_note', 'sticker', 'text']):
+                        if any(
+                            msg_data.get(k)
+                            for k in [
+                                "photo",
+                                "video",
+                                "file",
+                                "voice",
+                                "video_note",
+                                "sticker",
+                                "text",
+                            ]
+                        ):
                             messages.append(msg_data)
                             downloaded_count += 1
 
@@ -662,7 +656,9 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
 
                         # 每100条显示进度
                         if total_count % 100 == 0:
-                            print(f"  进度: {total_count} 条 (跳过 {skipped_count}, 成功 {downloaded_count}, 失败 {failed_count})")
+                            print(
+                                f"  进度: {total_count} 条 (跳过 {skipped_count}, 成功 {downloaded_count}, 失败 {failed_count})"
+                            )
 
                     except Exception as e:
                         failed_count += 1
@@ -676,25 +672,29 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
             # 最终保存状态
             state.save()
 
-            print(f"[EXPORT] 消息处理完成: 总计 {total_count} 条, 跳过 {skipped_count} 条, 成功 {downloaded_count} 条, 失败 {failed_count} 条")
+            print(
+                f"[EXPORT] 消息处理完成: 总计 {total_count} 条, 跳过 {skipped_count} 条, 成功 {downloaded_count} 条, 失败 {failed_count} 条"
+            )
 
             # 导出 JSON
-            json_path = export_dir / 'messages.json'
+            json_path = export_dir / "messages.json"
 
             # 如果已有 JSON，合并
             if json_path.exists():
                 print("[EXPORT] 发现已有 JSON，正在合并...")
                 try:
-                    with open(json_path, encoding='utf-8') as f:
+                    with open(json_path, encoding="utf-8") as f:
                         existing_data = json.load(f)
-                    existing_messages = existing_data.get('chats', {}).get('list', [{}])[0].get('messages', [])
+                    existing_messages = (
+                        existing_data.get("chats", {}).get("list", [{}])[0].get("messages", [])
+                    )
 
-                    existing_ids = {m['id'] for m in existing_messages}
+                    existing_ids = {m["id"] for m in existing_messages}
                     for msg in messages:
-                        if msg['id'] not in existing_ids:
+                        if msg["id"] not in existing_ids:
                             existing_messages.append(msg)
 
-                    existing_messages.sort(key=lambda m: m['id'])
+                    existing_messages.sort(key=lambda m: m["id"])
                     messages = existing_messages
                 except Exception as e:
                     print(f"  [WARNING] 合并 JSON 失败: {e}")
@@ -702,7 +702,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
             export_json_telegram_desktop_format(messages, channel_info, json_path)
 
             # 导出 HTML
-            html_path = export_dir / 'messages.html'
+            html_path = export_dir / "messages.html"
             export_html_telegram_desktop_style(messages, channel_info, html_path)
 
             print("[EXPORT] 导出完成！")
@@ -721,7 +721,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
             raise
     finally:
         # 确保客户端正确关闭
-        if 'client' in locals():
+        if "client" in locals():
             client.stop()
             print("[EXPORT] 客户端已断开连接")
 
@@ -737,9 +737,12 @@ def main():
     try:
         # 支持多频道导出和指定消息导出
         for i, channel_id in enumerate(args.channel_ids):
-            msg_ids = [args.message_ids[i]] if i < len(args.message_ids) and args.message_ids[i] else None
-            print(f"[EXPORT] 开始导出频道: {channel_id}" +
-                  (f", 消息ID: {msg_ids}" if msg_ids else ""))
+            msg_ids = (
+                [args.message_ids[i]] if i < len(args.message_ids) and args.message_ids[i] else None
+            )
+            print(
+                f"[EXPORT] 开始导出频道: {channel_id}" + (f", 消息ID: {msg_ids}" if msg_ids else "")
+            )
             run_export(channel_id=channel_id, message_ids=msg_ids)
     except KeyboardInterrupt:
         print("\n[EXPORT] 用户中断导出，已保存当前进度，可重新运行继续")

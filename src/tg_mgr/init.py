@@ -1,4 +1,5 @@
 """Interactive setup command."""
+
 import os
 from pathlib import Path
 
@@ -8,6 +9,7 @@ def setup_config_dir():
     config_dir = Path(os.environ.get("TG_MGR_CONFIG_DIR", "~/.tg-mgr")).expanduser()
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
+
 
 def run_init():
     """Interactive initialization wizard."""

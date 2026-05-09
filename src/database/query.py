@@ -7,11 +7,26 @@
 
 供 info、forward、clean 等模块使用
 """
+
 import sqlite3
-from typing import Any
+
+# 共享的 CTE 查询片段，用于从 reactions JSON 中提取数据
+_REACTION_CTE = """
+WITH reaction_messages AS (
+    SELECT
+        message_id,
+        json_extract(reactions, '$.positive') AS positive,
+        json_extract(reactions, '$.heart') AS heart,
+        (json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
+    FROM messages
+    WHERE is_valid = 1 AND reactions IS NOT NULL
+)
+"""
 
 
-def find_high_reaction_messages(conn: sqlite3.Connection, min_total: int = 0, limit: int = 10) -> list[tuple[int, int, int, int]]:
+def find_high_reaction_messages(
+    conn: sqlite3.Connection, min_total: int = 0, limit: int = 10
+) -> list[tuple[int, int, int, int]]:
     """
     查询高反应消息
 
@@ -24,38 +39,23 @@ def find_high_reaction_messages(conn: sqlite3.Connection, min_total: int = 0, li
         [(message_id, positive, heart, total), ...]
     """
     cursor = conn.cursor()
-    if min_total > 0:
-        cursor.execute('''
-            SELECT message_id, positive, heart, total FROM (
-                SELECT
-                    message_id,
-                    json_extract(reactions, '$.positive') AS positive,
-                    json_extract(reactions, '$.heart') AS heart,
-                    (json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
-                FROM messages
-                WHERE is_valid = 1 AND reactions IS NOT NULL
-            ) WHERE total > ?
-            ORDER BY total DESC
-            LIMIT ?
-        ''', (min_total, limit))
-    else:
-        cursor.execute('''
-            SELECT message_id, positive, heart, total FROM (
-                SELECT
-                    message_id,
-                    json_extract(reactions, '$.positive') AS positive,
-                    json_extract(reactions, '$.heart') AS heart,
-                    (json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
-                FROM messages
-                WHERE is_valid = 1 AND reactions IS NOT NULL
-            ) WHERE total > 0
-            ORDER BY total DESC
-            LIMIT ?
-        ''', (limit,))
+    threshold = min_total if min_total > 0 else 0
+    cursor.execute(
+        f"""
+        {_REACTION_CTE}
+        SELECT message_id, positive, heart, total FROM reaction_messages
+        WHERE total > ?
+        ORDER BY total DESC
+        LIMIT ?
+        """,
+        (threshold, limit),
+    )
     return cursor.fetchall()
 
 
-def find_reaction_messages_over_threshold(conn: sqlite3.Connection, threshold: int = 50, limit: int | None = None) -> list[tuple[int, int, int, int]]:
+def find_reaction_messages_over_threshold(
+    conn: sqlite3.Connection, threshold: int = 50, limit: int | None = None
+) -> list[tuple[int, int, int, int]]:
     """
     查询超过阈值的高反应消息
 
@@ -68,37 +68,33 @@ def find_reaction_messages_over_threshold(conn: sqlite3.Connection, threshold: i
         [(message_id, positive, heart, total), ...]
     """
     cursor = conn.cursor()
-    if limit:
-        cursor.execute('''
-            SELECT message_id, positive, heart, total FROM (
-                SELECT
-                    message_id,
-                    json_extract(reactions, '$.positive') AS positive,
-                    json_extract(reactions, '$.heart') AS heart,
-                    (json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
-                FROM messages
-                WHERE is_valid = 1 AND reactions IS NOT NULL
-            ) WHERE total > ?
+    if limit is not None:
+        cursor.execute(
+            f"""
+            {_REACTION_CTE}
+            SELECT message_id, positive, heart, total FROM reaction_messages
+            WHERE total > ?
             ORDER BY total DESC
             LIMIT ?
-        ''', (threshold, limit))
+            """,
+            (threshold, limit),
+        )
     else:
-        cursor.execute('''
-            SELECT message_id, positive, heart, total FROM (
-                SELECT
-                    message_id,
-                    json_extract(reactions, '$.positive') AS positive,
-                    json_extract(reactions, '$.heart') AS heart,
-                    (json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
-                FROM messages
-                WHERE is_valid = 1 AND reactions IS NOT NULL
-            ) WHERE total > ?
+        cursor.execute(
+            f"""
+            {_REACTION_CTE}
+            SELECT message_id, positive, heart, total FROM reaction_messages
+            WHERE total > ?
             ORDER BY total DESC
-        ''', (threshold,))
+            """,
+            (threshold,),
+        )
     return cursor.fetchall()
 
 
-def find_large_media(conn: sqlite3.Connection, min_size: int = 1048576, max_size: int = 1073741824) -> list[tuple[int, int, str]]:
+def find_large_media(
+    conn: sqlite3.Connection, min_size: int = 1048576, max_size: int = 1073741824
+) -> list[tuple[int, int, str]]:
     """
     查询指定大小范围外的媒体消息
 
@@ -111,13 +107,16 @@ def find_large_media(conn: sqlite3.Connection, min_size: int = 1048576, max_size
         [(message_id, file_size, media_type), ...]
     """
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT message_id, file_size, media_type
         FROM messages
         WHERE (file_size < ? OR file_size > ?)
         AND media_type IN ('video', 'document')
         ORDER BY file_size DESC
-    """, (min_size, max_size))
+    """,
+        (min_size, max_size),
+    )
     return cursor.fetchall()
 
 
@@ -133,12 +132,15 @@ def get_forward_sources(conn: sqlite3.Connection, limit: int = 10) -> list[tuple
         [(source_id, count), ...]
     """
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute(
+        """
         SELECT source_id, COUNT(*) as count
         FROM messages
         WHERE is_valid = 1 AND source_id IS NOT NULL
         GROUP BY source_id
         ORDER BY count DESC
         LIMIT ?
-    ''', (limit,))
+    """,
+        (limit,),
+    )
     return cursor.fetchall()

@@ -1,6 +1,7 @@
 """
 tg-mgr 命令行入口 - 支持 python -m tg_mgr
 """
+
 import sys
 from pathlib import Path
 

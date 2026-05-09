@@ -87,7 +87,7 @@ class TestAnalyzeChannel:
         from modules.info import analyze_channel
 
         with patch('modules.info.get_config') as mock_config, \
-             patch('modules.clean.run_sync') as mock_sync, \
+             patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
              patch('modules.info.find_high_reaction_messages') as mock_reactions:
@@ -118,7 +118,7 @@ class TestAnalyzeChannel:
         from modules.info import analyze_channel
 
         with patch('modules.info.get_config') as mock_config, \
-             patch('modules.clean.run_sync') as mock_sync, \
+             patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
              patch('modules.info.find_high_reaction_messages') as mock_reactions:
@@ -153,7 +153,7 @@ class TestAnalyzeChannel:
         from modules.info import analyze_channel
 
         with patch('modules.info.get_config') as mock_config, \
-             patch('modules.clean.run_sync') as mock_sync, \
+             patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
              patch('modules.info.find_high_reaction_messages') as mock_reactions:

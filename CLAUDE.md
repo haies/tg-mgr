@@ -13,9 +13,9 @@
 ### Module Structure
 
 - `src/tg_mgr/` - CLI entry point (dispatcher with lazy module loading)
-- `src/modules/` - Feature modules (clean, export, filter, forward, info)
+- `src/modules/` - Feature modules (clean, export, filter, forward, info, **sync**)
 - `src/utils/` - Utilities (telegram_client, telegram_link, file_sanitizer)
-- `src/database/` - DB schema (`schema.sql`) and connection management
+- `src/database/` - DB schema (`schema.sql`), connection management, and **messages.py** (messages table operations)
 - `tests/` - Test suite with fixtures in `conftest.py`
 
 ### Configuration
@@ -163,16 +163,43 @@ except errors.FloodWait as e:
     time.sleep(wait_time)
 ```
 
-## Query Module (modules/query.py)
+## Query Module (database/query.py)
 
 Shared query functions for other modules:
 
 ```python
-from modules.query import (
+from database.query import (
     find_high_reaction_messages,      # High reaction messages
     find_reaction_messages_over_threshold,  # Messages above threshold
     find_large_media,                 # Large file queries
     get_forward_sources,               # Forward source statistics
+)
+```
+
+## Sync Module (modules/sync.py)
+
+Unified sync functionality for other modules:
+
+```python
+from modules.sync import sync_channel
+
+sync_channel(channel_id="-1001234567890")  # Sync to temp DB first
+```
+
+## Messages Module (database/messages.py)
+
+Messages table operations for database layer:
+
+```python
+from database.messages import (
+    init_database,              # Initialize DB schema
+    get_last_processed_id,      # Get last synced message ID
+    insert_messages,             # Batch insert messages
+    find_duplicates,             # Find duplicate messages
+    find_invalid_messages,       # Find invalid messages
+    update_message_duplicate,    # Mark message as duplicate
+    get_message_stats,           # Get message statistics
+    get_existing_files,          # Get existing file IDs for dedup
 )
 ```
 

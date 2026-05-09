@@ -18,21 +18,22 @@
 - 同步+清理无效: python modules/clean.py -i
 - 同步+去重+清理无效: python modules/clean.py -di
 """
+
 import argparse
 import json
 import sqlite3
 import sys
 import time
-from typing import Optional
 
 from pyrogram import Client, errors, types
 
-from database import get_database_path, get_schema_path, get_db
+from database import get_database_path, get_db, get_schema_path
+from utils.media import extract_media_info, extract_reaction_data, extract_source_id
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import generate_tg_link
-from utils.media import extract_media_info, extract_reaction_data, extract_source_id
 
 # ====== SYNC FUNCTIONALITY ======
+
 
 def init_database() -> sqlite3.Connection:
     """初始化数据库连接并创建表结构"""
@@ -47,12 +48,12 @@ def init_database() -> sqlite3.Connection:
         cursor.executescript(f.read())
 
     # 确保channels表存在
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY,
             title TEXT NOT NULL
         )
-    ''')
+    """)
 
     # 创建索引以优化查询性能
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON messages(file_unique_id)")
@@ -62,6 +63,7 @@ def init_database() -> sqlite3.Connection:
 
     conn.commit()
     return conn
+
 
 def check_restricted(message: types.Message) -> str:
     """
@@ -96,7 +98,7 @@ def check_restricted(message: types.Message) -> str:
 
     # 4. 媒体有效性深度检查 - 只有当media对象存在但file_id为空时才算无效
     if message.media:
-        media_obj = (message.video or message.photo or message.document or message.animation)
+        media_obj = message.video or message.photo or message.document or message.animation
         if media_obj:
             # 检查file_id是否为空（这是最可靠的无效指标）
             if not getattr(media_obj, "file_id", None):
@@ -104,12 +106,14 @@ def check_restricted(message: types.Message) -> str:
 
     return ""
 
+
 def get_last_processed_id(conn: sqlite3.Connection) -> int:
     """获取最后处理的消息ID，用于断点续同步"""
     cursor = conn.cursor()
     cursor.execute("SELECT MAX(message_id) FROM messages")
     result = cursor.fetchone()
     return result[0] or 0
+
 
 def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen_files: set) -> int:
     """批量处理消息以提高性能"""
@@ -130,7 +134,9 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
 
         # Check for duplicates
         if media_info.file_unique_id in seen_files:
-            duplicates.append((message.id, media_info.file_unique_id, media_info.file_size, media_info.media_type))
+            duplicates.append(
+                (message.id, media_info.file_unique_id, media_info.file_size, media_info.media_type)
+            )
         else:
             # 使用共享函数提取反应数据
             reaction = extract_reaction_data(message)
@@ -142,19 +148,21 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
             source_id = extract_source_id(message)
 
             # 提取消息文本
-            caption = message.caption or message.text or ''
+            caption = message.caption or message.text or ""
 
-            new_files.append((
-                message.id,
-                media_info.file_unique_id,
-                media_info.file_size,
-                media_info.media_type,
-                caption,
-                0,
-                is_valid,
-                json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
-                source_id
-            ))
+            new_files.append(
+                (
+                    message.id,
+                    media_info.file_unique_id,
+                    media_info.file_size,
+                    media_info.media_type,
+                    caption,
+                    0,
+                    is_valid,
+                    json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
+                    source_id,
+                )
+            )
             seen_files.add(media_info.file_unique_id)
 
     # Process duplicates in bulk
@@ -164,7 +172,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
                 cursor.execute(
                     "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, is_duplicate) "
                     "VALUES (?, ?, ?, ?, 1)",
-                    duplicate
+                    duplicate,
                 )
             except sqlite3.IntegrityError:
                 print(f"[SYNC] 消息 #{duplicate[0]} 已存在，跳过插入")
@@ -176,7 +184,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
             cursor.executemany(
                 "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                new_files
+                new_files,
             )
         except sqlite3.IntegrityError:
             for new_file in new_files:
@@ -184,7 +192,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
                     cursor.execute(
                         "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        new_file
+                        new_file,
                     )
                 except sqlite3.IntegrityError:
                     print(f"[SYNC] 消息 #{new_file[0]} 已存在，跳过插入")
@@ -192,16 +200,17 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
     conn.commit()
     return skipped
 
-def run_sync(channel_id: Optional[str] = None) -> None:
+
+def run_sync(channel_id: str | None = None) -> None:
     """主同步流程
 
     Args:
         channel_id: 频道ID，如果为None则从配置文件读取
     """
     config = get_config()
-    _api_id = config['api_id']
-    _api_hash = config['api_hash']
-    _channel_id = channel_id if channel_id else config['channel_id']
+    _api_id = config["api_id"]
+    _api_hash = config["api_hash"]
+    _channel_id = channel_id if channel_id else config["channel_id"]
 
     conn = init_database()
     last_processed_id = get_last_processed_id(conn)
@@ -230,7 +239,9 @@ def run_sync(channel_id: Optional[str] = None) -> None:
         while has_more:
             batch_messages = []
             try:
-                for message in client.get_chat_history(_channel_id, offset_id=offset_id, limit=batch_size):
+                for message in client.get_chat_history(
+                    _channel_id, offset_id=offset_id, limit=batch_size
+                ):
                     batch_messages.append(message)
                     offset_id = message.id
             except (errors.ChannelPrivate, errors.ChannelInvalid, errors.ChatForbidden):
@@ -275,15 +286,19 @@ def run_sync(channel_id: Optional[str] = None) -> None:
         duration = end_time - start_time
         print(f"[SYNC] 同步完成，耗时: {duration:.2f} 秒")
 
+
 def exponential_backoff(retry_count: int, retry_delay_base: int) -> float:
     """计算等待时间：1s, 2s, 4s, 8s, 16s..."""
-    return retry_delay_base * (2 ** retry_count) + (retry_count * 0.1)
+    return retry_delay_base * (2**retry_count) + (retry_count * 0.1)
 
-def delete_message_safely(client: Client, conn: sqlite3.Connection, message_id: int, channel_id: str, retry_count: int = 0) -> bool:
+
+def delete_message_safely(
+    client: Client, conn: sqlite3.Connection, message_id: int, channel_id: str, retry_count: int = 0
+) -> bool:
     """安全删除消息（带重试机制）"""
     config = get_config()
-    max_retries = config['max_retries']
-    retry_delay_base = config['retry_delay_base']
+    max_retries = config["max_retries"]
+    retry_delay_base = config["retry_delay_base"]
 
     try:
         client.delete_messages(channel_id, message_id)
@@ -291,24 +306,24 @@ def delete_message_safely(client: Client, conn: sqlite3.Connection, message_id: 
 
         # 更新数据库中的 is_duplicate 标志
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE messages SET is_duplicate = 1 WHERE message_id = ?",
-            (message_id,)
-        )
+        cursor.execute("UPDATE messages SET is_duplicate = 1 WHERE message_id = ?", (message_id,))
         return True
     except errors.FloodWait as e:
         wait_time = max(e.value, 5)
         print(f"    [WARNING] FloodWait: 等待 {wait_time} 秒后重试...")
         time.sleep(wait_time)
-        return delete_message_safely(client, conn, message_id, channel_id, retry_count)
+        return delete_message_safely(client, conn, message_id, channel_id, retry_count + 1)
     except Exception as e:
         if retry_count < max_retries:
             wait_time = exponential_backoff(retry_count, retry_delay_base)
-            print(f"    [WARNING] 删除消息 #{message_id} 失败: {str(e)} - {retry_count+1}/{max_retries} 次重试 (等待 {wait_time:.1f} 秒)")
+            print(
+                f"    [WARNING] 删除消息 #{message_id} 失败: {str(e)} - {retry_count + 1}/{max_retries} 次重试 (等待 {wait_time:.1f} 秒)"
+            )
             time.sleep(wait_time)
             return delete_message_safely(client, conn, message_id, channel_id, retry_count + 1)
         print(f"    [ERROR] 删除消息 #{message_id} 失败: {str(e)}")
         return False
+
 
 def find_duplicates(conn: sqlite3.Connection) -> list:
     """查找所有重复媒体组（基于文件唯一ID）"""
@@ -324,19 +339,23 @@ def find_duplicates(conn: sqlite3.Connection) -> list:
     duplicates = []
     for file_unique_id, file_size, media_type, keep_id in cursor.fetchall():
         # 按时间排序获取消息ID列表（排除保留ID）
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT message_id
             FROM messages
             WHERE file_unique_id = ? AND message_id != ?
             ORDER BY timestamp ASC
-        """, (file_unique_id, keep_id))
+        """,
+            (file_unique_id, keep_id),
+        )
 
         delete_ids = [row[0] for row in cursor.fetchall()]
         duplicates.append((file_size, media_type, keep_id, delete_ids))
 
     return duplicates
 
-def run_deduplicate(delete: bool = False, channel_id: Optional[str] = None) -> None:
+
+def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> None:
     """重复检测与清理流程
 
     Args:
@@ -344,9 +363,9 @@ def run_deduplicate(delete: bool = False, channel_id: Optional[str] = None) -> N
         channel_id: 频道ID，如果为None则从配置文件读取
     """
     config = get_config()
-    _api_id = config['api_id']
-    _api_hash = config['api_hash']
-    _channel_id = channel_id if channel_id else config['channel_id']
+    _api_id = config["api_id"]
+    _api_hash = config["api_hash"]
+    _channel_id = channel_id if channel_id else config["channel_id"]
 
     with get_db() as conn:
         duplicates = find_duplicates(conn)
@@ -366,7 +385,9 @@ def run_deduplicate(delete: bool = False, channel_id: Optional[str] = None) -> N
 
         try:
             for i, (file_size, media_type, keep_id, delete_ids) in enumerate(duplicates, 1):
-                print(f"\n重复组 #{i} (共 {len(delete_ids)+1} 条消息, {media_type}, {file_size} bytes):")
+                print(
+                    f"\n重复组 #{i} (共 {len(delete_ids) + 1} 条消息, {media_type}, {file_size} bytes):"
+                )
                 print(f"  - 保留: {generate_tg_link(_channel_id, keep_id)}")
 
                 for msg_id in delete_ids:
@@ -382,13 +403,16 @@ def run_deduplicate(delete: bool = False, channel_id: Optional[str] = None) -> N
 
             if delete:
                 conn.commit()
-                print(f"\n[CLEAN] 去重完成 - 共处理 {len(duplicates)} 组重复消息, 成功删除 {total_deleted} 条, 失败 {total_failed} 条")
+                print(
+                    f"\n[CLEAN] 去重完成 - 共处理 {len(duplicates)} 组重复消息, 成功删除 {total_deleted} 条, 失败 {total_failed} 条"
+                )
             else:
                 print("\n[CLEAN] 检测完成")
 
         finally:
             if client and client.is_connected:
                 client.stop()
+
 
 def find_invalid_messages(conn: sqlite3.Connection) -> list:
     """查找所有无效消息（is_valid = 0）"""
@@ -401,7 +425,8 @@ def find_invalid_messages(conn: sqlite3.Connection) -> list:
 
     return cursor.fetchall()
 
-def run_deinvalid(delete: bool = False, channel_id: Optional[str] = None) -> None:
+
+def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> None:
     """无效消息检测与清理流程
 
     Args:
@@ -409,9 +434,9 @@ def run_deinvalid(delete: bool = False, channel_id: Optional[str] = None) -> Non
         channel_id: 频道ID，如果为None则从配置文件读取
     """
     config = get_config()
-    _api_id = config['api_id']
-    _api_hash = config['api_hash']
-    _channel_id = channel_id if channel_id else config['channel_id']
+    _api_id = config["api_id"]
+    _api_hash = config["api_hash"]
+    _channel_id = channel_id if channel_id else config["channel_id"]
 
     with get_db() as conn:
         invalid_messages = find_invalid_messages(conn)
@@ -447,7 +472,9 @@ def run_deinvalid(delete: bool = False, channel_id: Optional[str] = None) -> Non
 
             if delete:
                 conn.commit()
-                print(f"\n[CLEAN] 清理完成 - 共处理 {len(invalid_messages)} 条无效消息, 成功删除 {total_deleted} 条, 失败 {total_failed} 条")
+                print(
+                    f"\n[CLEAN] 清理完成 - 共处理 {len(invalid_messages)} 条无效消息, 成功删除 {total_deleted} 条, 失败 {total_failed} 条"
+                )
             else:
                 print("\n[CLEAN] 检测完成")
 
@@ -455,21 +482,27 @@ def run_deinvalid(delete: bool = False, channel_id: Optional[str] = None) -> Non
             if client and client.is_connected:
                 client.stop()
 
+
 def main():
     """主执行流程"""
-    parser = argparse.ArgumentParser(description='Telegram 清理工具')
-    parser.add_argument('-d', '--deduplicate', action='store_true', help='启用去重模式')
-    parser.add_argument('-i', '--deinvalid', action='store_true', help='启用清理无效消息模式')
-    parser.add_argument('-u', '--sync', action='store_true', help='强制同步消息')
-    parser.add_argument('-f', '--force-reset', action='store_true', help='强制重置数据库')
+    parser = argparse.ArgumentParser(description="Telegram 清理工具")
+    parser.add_argument("-d", "--deduplicate", action="store_true", help="启用去重模式")
+    parser.add_argument("-i", "--deinvalid", action="store_true", help="启用清理无效消息模式")
+    parser.add_argument("-u", "--sync", action="store_true", help="强制同步消息")
+    parser.add_argument("-f", "--force-reset", action="store_true", help="强制重置数据库")
     args = parser.parse_args()
 
     # 从配置文件读取频道ID
     config = get_config()
-    channel_id = config.get('channel_id')
+    channel_id = config.get("channel_id")
 
     # 判断是否需要执行sync
-    should_sync = not args.deduplicate and not args.deinvalid or args.sync or any('u' in arg for arg in sys.argv[1:])
+    should_sync = (
+        not args.deduplicate
+        and not args.deinvalid
+        or args.sync
+        or any("u" in arg for arg in sys.argv[1:])
+    )
 
     # 只有在同步或强制重置时才清空数据库
     if should_sync or args.force_reset:
@@ -489,6 +522,7 @@ def main():
         print("\n未指定清理参数，仅执行检测:")
         run_deduplicate(delete=False, channel_id=channel_id)
         run_deinvalid(delete=False, channel_id=channel_id)
+
 
 if __name__ == "__main__":
     main()

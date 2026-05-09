@@ -35,6 +35,6 @@ def get_channel_address(channel_id: int) -> str:
     """
     abs_id = abs(channel_id)
     str_id = str(abs_id)
-    if str_id.startswith('100') and len(str_id) >= 13:
+    if str_id.startswith("100") and len(str_id) >= 13:
         return f"t.me/c/{str_id[3:]}"
     return f"t.me/c/{str_id}"
