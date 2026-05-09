@@ -101,6 +101,7 @@ def insert_messages(
                     is_valid,
                     json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
                     source_id,
+                    media_info.views,
                 )
             )
             seen_files.add(media_info.file_unique_id)
@@ -110,8 +111,8 @@ def insert_messages(
         for duplicate in duplicates:
             try:
                 cursor.execute(
-                    "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, is_duplicate) "
-                    "VALUES (?, ?, ?, ?, 1)",
+                    "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, is_duplicate, views) "
+                    "VALUES (?, ?, ?, ?, 1, 0)",
                     duplicate,
                 )
             except sqlite3.IntegrityError:
@@ -121,16 +122,16 @@ def insert_messages(
     if new_files:
         try:
             cursor.executemany(
-                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, views) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 new_files,
             )
         except sqlite3.IntegrityError:
             for new_file in new_files:
                 try:
                     cursor.execute(
-                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, views) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         new_file,
                     )
                 except sqlite3.IntegrityError:

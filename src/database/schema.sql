@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS messages (
     is_valid BOOLEAN DEFAULT 1,
     reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
     source_id INTEGER,  -- 存储转发来源的频道ID
+    views INTEGER DEFAULT 0,  -- 浏览量
     UNIQUE(message_id)
 );
 

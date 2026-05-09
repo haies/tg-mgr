@@ -144,3 +144,29 @@ def get_forward_sources(conn: sqlite3.Connection, limit: int = 10) -> list[tuple
         (limit,),
     )
     return cursor.fetchall()
+
+
+def find_messages_by_views(conn: sqlite3.Connection, min_views: int = 1, limit: int = 10) -> list[tuple[int, int, int, int]]:
+    """
+    按浏览量查找消息
+
+    Args:
+        conn: 数据库连接
+        min_views: 最小浏览量
+        limit: 返回条数上限
+
+    Returns:
+        [(message_id, views, source_id, media_type), ...]
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT message_id, views, source_id, media_type
+        FROM messages
+        WHERE is_valid = 1 AND views >= ?
+        ORDER BY views DESC
+        LIMIT ?
+    """,
+        (min_views, limit),
+    )
+    return cursor.fetchall()

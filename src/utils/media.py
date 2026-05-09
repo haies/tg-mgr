@@ -19,6 +19,7 @@ class MediaInfo:
     file_unique_id: str | None
     file_size: int | None
     media_type: str | None
+    views: int = 0
 
 
 @dataclass
@@ -38,8 +39,10 @@ def extract_media_info(message: types.Message) -> MediaInfo:
         message: Telegram Message 对象
 
     Returns:
-        MediaInfo 包含 file_unique_id, file_size, media_type
+        MediaInfo 包含 file_unique_id, file_size, media_type, views
     """
+    views = getattr(message, "views", 0) or 0
+
     if message.photo:
         if hasattr(message.photo, "sizes") and message.photo.sizes:
             largest_photo = max(message.photo.sizes, key=lambda p: p.file_size or 0)
@@ -47,52 +50,60 @@ def extract_media_info(message: types.Message) -> MediaInfo:
                 file_unique_id=largest_photo.file_unique_id,
                 file_size=largest_photo.file_size,
                 media_type="photo",
+                views=views,
             )
         return MediaInfo(
             file_unique_id=message.photo.file_unique_id,
             file_size=message.photo.file_size,
             media_type="photo",
+            views=views,
         )
     elif message.video:
         return MediaInfo(
             file_unique_id=message.video.file_unique_id,
             file_size=message.video.file_size,
             media_type="video",
+            views=views,
         )
     elif message.document:
         return MediaInfo(
             file_unique_id=message.document.file_unique_id,
             file_size=message.document.file_size,
             media_type="document",
+            views=views,
         )
     elif message.audio:
         return MediaInfo(
             file_unique_id=message.audio.file_unique_id,
             file_size=message.audio.file_size,
             media_type="audio",
+            views=views,
         )
     elif message.animation:
         return MediaInfo(
             file_unique_id=message.animation.file_unique_id,
             file_size=message.animation.file_size,
             media_type="animation",
+            views=views,
         )
     elif message.voice:
         return MediaInfo(
             file_unique_id=message.voice.file_unique_id,
             file_size=message.voice.file_size,
             media_type="voice",
+            views=views,
         )
     elif message.video_note:
         return MediaInfo(
             file_unique_id=message.video_note.file_unique_id,
             file_size=message.video_note.file_size,
             media_type="video_note",
+            views=views,
         )
     elif message.text:
-        return MediaInfo(file_unique_id="", file_size=None, media_type="text")
+        return MediaInfo(file_unique_id="", file_size=None, media_type="text", views=views)
     else:
-        return MediaInfo(file_unique_id="", file_size=None, media_type="other")
+        return MediaInfo(file_unique_id="", file_size=None, media_type="other", views=views)
 
 
 def extract_reaction_data(message: types.Message) -> ReactionData:
@@ -162,6 +173,7 @@ def message_to_dict(message: types.Message) -> dict[str, Any]:
         "is_valid": 1,
         "reactions": {"positive": reaction.positive, "heart": reaction.heart},
         "source_id": source_id,
+        "views": media_info.views,
     }
 
 
