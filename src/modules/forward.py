@@ -16,7 +16,6 @@
 """
 
 import logging
-import os
 import re
 import sqlite3
 import sys
@@ -135,17 +134,15 @@ def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:
 
 def sync_channel_for_forward(channel_id: int) -> None:
     """为转发同步频道数据（使用临时数据库）"""
+    from modules.sync import sync_channel
+
     temp_db_path = get_database_path().with_suffix(".tmp.db")
     original_db_path = get_database_path()
 
-    os.environ["TG_MGR_DB_PATH"] = str(temp_db_path)
-
-    from modules.sync import sync_channel
-
     try:
-        sync_channel(channel_id=str(channel_id))
+        sync_channel(channel_id=str(channel_id), db_path=str(temp_db_path))
     finally:
-        os.environ.pop("TG_MGR_DB_PATH", None)
+        pass  # sync_channel handles env cleanup internally
 
     # 同步成功后，替换旧数据库
     if temp_db_path.exists():
@@ -338,7 +335,12 @@ def forward_with_recursion(
 
         # 查找要转发的消息
         messages = find_messages_to_forward(conn, channel_id)
-        print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息")
+        if messages:
+            total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
+            total_views = sum(m.get("views", 0) for m in messages)
+            print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息 (反应数: {total}, 浏览量: {total_views})")
+        else:
+            print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 0 条消息")
 
         if messages:
             # 转发到目标
@@ -363,6 +365,8 @@ def forward_with_recursion(
                     total_forwarded += nf
                     total_skipped += ns
                     total_failed += nfa
+                else:
+                    print(f"[FORWARD] 深度 {current_depth}: 未找到来源频道，停止递归")
 
         conn.close()
         processed_channels.add(channel_id)
@@ -424,7 +428,8 @@ def main():
     parser.add_argument("-o", "--target", type=int, help="目标频道ID")
     parser.add_argument("-c", "--check", action="store_true", help="转发前检查目标频道是否已存在")
     parser.add_argument(
-        "-r", "--depth", type=int, default=None, help="递归深度（默认5，0表示不递归）"
+        "-r", "--depth", type=int, nargs="?", const=DEFAULT_RECURSION_DEPTH, default=None,
+        help=f"递归深度（-r3 或 -r 3，默认{DEFAULT_RECURSION_DEPTH}，0表示不递归）"
     )
 
     args = parser.parse_args()
@@ -493,7 +498,12 @@ def main():
 
                 conn = get_db_connection()
                 messages = find_messages_to_forward(conn, channel_id)
-                print(f"[FORWARD] 找到 {len(messages)} 条消息")
+                if messages:
+                    total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
+                    total_views = sum(m.get("views", 0) for m in messages)
+                    print(f"[FORWARD] 频道 {channel_id} 找到 {len(messages)} 条消息 (反应数: {total}, 浏览量: {total_views})")
+                else:
+                    print(f"[FORWARD] 频道 {channel_id} 找到 0 条消息")
                 if messages:
                     f, s, fa = forward_messages_batch(channel_id, [target_channel_id], messages, args.check)
                     print(f"[FORWARD] 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")

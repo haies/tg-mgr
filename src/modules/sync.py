@@ -120,6 +120,7 @@ def _sync_impl(_channel_id: str) -> None:
         if total_skipped > 0:
             print(f"  跳过（无file_unique_id）: {total_skipped}")
 
+        conn.commit()
         conn.close()
         end_time = time.time()
         duration = end_time - start_time
