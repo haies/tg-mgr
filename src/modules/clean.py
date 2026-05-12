@@ -325,6 +325,35 @@ def delete_message_safely(
         return False
 
 
+def count_chinese_chars(text: str) -> int:
+    """统计字符串中中文字符的数量"""
+    return sum(1 for char in text if '一' <= char <= '鿿')
+
+
+def is_junk_message(text: str) -> bool:
+    """判断消息是否为垃圾消息：单图/视频 + 长文字
+
+    判定规则：
+    - 30字以上中文 或 100字符以上英文
+    """
+    chinese_count = count_chinese_chars(text)
+    return chinese_count >= 30 or len(text) >= 100
+
+
+def find_junk_messages(conn: sqlite3.Connection) -> list:
+    """查找所有垃圾消息（单图/视频+长文字）"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
+        FROM messages
+        WHERE media_type IN ('photo', 'video')
+        AND caption IS NOT NULL AND caption != ''
+    """)
+    messages = cursor.fetchall()
+    # 应用层过滤：判断文字长度是否达到垃圾标准
+    return [msg for msg in messages if is_junk_message(msg[4])]
+
+
 def find_duplicates(conn: sqlite3.Connection) -> list:
     """查找所有重复媒体组（基于文件唯一ID）"""
     cursor = conn.cursor()
@@ -483,45 +512,123 @@ def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> None:
                 client.stop()
 
 
+def run_dejunk(delete: bool = False, channel_id: str | None = None) -> None:
+    """垃圾消息检测与清理流程
+
+    Args:
+        delete: 是否实际删除消息
+        channel_id: 频道ID，如果为None则从配置文件读取
+    """
+    config = get_config()
+    _channel_id = channel_id if channel_id else config["channel_id"]
+
+    with get_db() as conn:
+        junk_messages = find_junk_messages(conn)
+
+        if not junk_messages:
+            print("[CLEAN] 未检测到垃圾消息")
+            return
+
+        total_deleted = 0
+        total_failed = 0
+
+        print(f"[CLEAN] 检测到 {len(junk_messages)} 条垃圾消息:")
+        client = None
+        if delete:
+            client = get_client("tg-mgr")
+            client.start()
+
+        try:
+            for idx, msg in enumerate(junk_messages, 1):
+                msg_id, file_unique_id, file_size, media_type, caption, timestamp = msg
+                tg_link = generate_tg_link(_channel_id, msg_id)
+
+                print(f"\n消息 #{idx} (ID: {msg_id}, {media_type}, {file_size} bytes):")
+                print(f"  - 链接: {tg_link}")
+                print(f"  - 文字长度: {len(caption)} 字")
+                print(f"  - 时间: {timestamp}")
+
+                if delete:
+                    success = delete_message_safely(client, conn, msg_id, _channel_id)
+                    if success:
+                        total_deleted += 1
+                    else:
+                        total_failed += 1
+
+            if delete:
+                conn.commit()
+                print(
+                    f"\n[CLEAN] 清理完成 - 共处理 {len(junk_messages)} 条垃圾消息, 成功删除 {total_deleted} 条, 失败 {total_failed} 条"
+                )
+            else:
+                print("\n[CLEAN] 检测完成")
+
+        finally:
+            if client and client.is_connected:
+                client.stop()
+
+
 def main():
     """主执行流程"""
     parser = argparse.ArgumentParser(description="Telegram 清理工具")
-    parser.add_argument("-d", "--deduplicate", action="store_true", help="启用去重模式")
-    parser.add_argument("-i", "--deinvalid", action="store_true", help="启用清理无效消息模式")
-    parser.add_argument("-u", "--sync", action="store_true", help="强制同步消息")
-    parser.add_argument("-f", "--force-reset", action="store_true", help="强制重置数据库")
+    parser.add_argument("-d", action="store_true", help="去重模式")
+    parser.add_argument("-i", action="store_true", help="清理无效消息模式")
+    parser.add_argument("-u", action="store_true", help="强制同步消息（断点续传）")
+    parser.add_argument("-s", action="store_true", help="清理垃圾消息模式（单图/视频+长文字）")
+    parser.add_argument("-y", action="store_true", help="仅列出待删除消息，不执行删除")
+    parser.add_argument("-f", action="store_true", help="强制重置数据库")
+    parser.add_argument("channels", nargs="*", default=None, help="指定要清理的频道ID（可选）")
     args = parser.parse_args()
 
-    # 从配置文件读取频道ID
-    config = get_config()
-    channel_id = config.get("channel_id")
+    # 确定要处理的频道列表
+    if args.channels:
+        channels = args.channels
+    else:
+        config = get_config()
+        channel_id = config.get("channel_id")
+        channels = [channel_id] if channel_id else []
 
-    # 判断是否需要执行sync
+    if not channels:
+        print("[CLEAN] 错误：未指定频道ID，且配置文件中也未设置频道ID")
+        return
+
+    # 判断是否需要执行sync（无清理参数时默认同步，或显式指定-u）
     should_sync = (
-        not args.deduplicate
-        and not args.deinvalid
-        or args.sync
+        not args.d
+        and not args.i
+        and not args.s
+        or args.u
         or any("u" in arg for arg in sys.argv[1:])
     )
 
-    # 只有在同步或强制重置时才清空数据库
-    if should_sync or args.force_reset:
-        db_path = get_database_path()
-        if db_path.exists():
-            db_path.unlink()
-        run_sync(channel_id=channel_id)
+    # dry_run 模式（-y）影响所有删除操作
+    dry_run = args.y
 
-    # 根据参数执行操作
-    if args.deduplicate or args.deinvalid:
-        if args.deduplicate:
-            run_deduplicate(delete=True, channel_id=channel_id)
-        if args.deinvalid:
-            run_deinvalid(delete=True, channel_id=channel_id)
-    else:
-        # 未指定清理参数时，只检测不删除
-        print("\n未指定清理参数，仅执行检测:")
-        run_deduplicate(delete=False, channel_id=channel_id)
-        run_deinvalid(delete=False, channel_id=channel_id)
+    # 对每个频道分别执行操作
+    for channel in channels:
+        print(f"\n{'='*50}")
+        print(f"[CLEAN] 开始清理频道: {channel}")
+        print(f"{'='*50}")
+
+        # 只有在同步或强制重置时才清空数据库
+        if should_sync or args.f:
+            db_path = get_database_path()
+            if db_path.exists():
+                db_path.unlink()
+            run_sync(channel_id=channel)
+
+        # 执行各项清理操作
+        if args.d:
+            run_deduplicate(delete=not dry_run, channel_id=channel)
+        if args.i:
+            run_deinvalid(delete=not dry_run, channel_id=channel)
+        if args.s:
+            run_dejunk(delete=not dry_run, channel_id=channel)
+
+        # 无清理参数时，只检测不删除
+        if not args.d and not args.i and not args.s:
+            run_deduplicate(delete=False, channel_id=channel)
+            run_deinvalid(delete=False, channel_id=channel)
 
 
 if __name__ == "__main__":
