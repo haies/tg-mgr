@@ -42,31 +42,60 @@ logger = logging.getLogger(__name__)
 DEFAULT_RECURSION_DEPTH = 5
 
 
-def parse_source_arg(arg: str) -> tuple[int | None, int | None]:
-    """解析参数为 (channel_id, message_id)
+def parse_source_arg(arg: str) -> tuple[int | None, int | None, str | None]:
+    """解析参数为 (channel_id, message_id, username)
 
     Args:
         arg: 频道ID或链接
 
     Returns:
-        (channel_id, message_id) - message_id 为 None 表示整个频道
+        (channel_id, message_id, username) - message_id 为 None 表示整个频道
+        username 用于延迟解析（如 jn2678 -> -1001234567890）
     """
-    # 解析链接：https://t.me/c/1234567890/12345
-    link_pattern = r"https?://t\.me/c/(\d+)/(\d+)"
+    # 解析链接：https://t.me/c/1234567890/12345 或 https://t.me/username/123?single
+    link_pattern = r"https?://t\.me/([\w_]+)/(\d+)(?:\?.*)?$"
     match = re.match(link_pattern, arg)
     if match:
-        raw_id = int(match.group(1))
+        identifier = match.group(1)
         message_id = int(match.group(2))
-        # t.me/c/xxxx/ 中的 xxxx 是超级群 ID，需要加 -100 前缀
-        channel_id = -(raw_id + 1000000000000) if raw_id < 100000000000 else -raw_id
-        return (channel_id, message_id)
+
+        # 检查是否是数字 ID（私有频道格式 t.me/c/数字/数字）
+        if identifier.isdigit():
+            raw_id = int(identifier)
+            # t.me/c/xxxx/ 中的 xxxx 是超级群 ID，需要加 -100 前缀
+            channel_id = -(raw_id + 1000000000000) if raw_id < 100000000000 else -raw_id
+            return (channel_id, message_id, None)
+        else:
+            # 用户名格式，需要延迟解析（调用 API）
+            return (None, message_id, identifier)
 
     # 纯数字频道ID
     try:
-        return (int(arg), None)
+        return (int(arg), None, None)
     except ValueError:
         print(f"[ERROR] 无法解析参数: {arg}")
-        return (None, None)
+        return (None, None, None)
+
+
+def resolve_username_to_channel_id(client: Client, username: str) -> int | None:
+    """将用户名解析为频道ID
+
+    Args:
+        client: Telegram 客户端
+        username: 用户名（可以是 'jn2678' 或 '@jn2678'）
+
+    Returns:
+        频道ID，解析失败返回 None
+    """
+    try:
+        # 确保 username 有 @ 前缀
+        if not username.startswith('@'):
+            username = f"@{username}"
+        chat = client.get_chat(username)
+        return chat.id
+    except Exception as e:
+        print(f"[ERROR] 无法解析用户名 {username}: {e}")
+        return None
 
 
 def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int) -> list[dict[str, Any]]:
@@ -177,7 +206,7 @@ def forward_single_message(
         if group_msg and group_msg.media_group_id:
             # 媒体组：使用 send_media_group 转发
             media_group_messages = _get_media_group_messages(
-                client, source_channel_id, group_msg.media_group_id
+                client, source_channel_id, group_msg.media_group_id, message_id
             )
             return _forward_media_group(client, source_channel_id, target_channel_id, media_group_messages)
         else:
@@ -212,20 +241,81 @@ def _get_original_media_group_message(
 
 
 def _get_media_group_messages(
-    client: Client, channel_id: int, media_group_id: str
+    client: Client, channel_id: int, media_group_id: str, center_msg_id: int | None = None
 ) -> list[Message]:
-    """获取媒体组的所有消息"""
+    """获取媒体组的所有消息
+
+    Args:
+        client: Telegram 客户端
+        channel_id: 频道ID
+        media_group_id: 媒体组ID
+        center_msg_id: 中心消息ID，用于双向搜索
+
+    Returns:
+        媒体组消息列表（按 message_id 排序）
+    """
     try:
         # 先调用 get_chat 建立会话
         client.get_chat(channel_id)
+
         messages = []
-        # 需要获取该媒体组的所有消息
-        # 通过遍历频道历史找到同一 media_group_id 的消息
-        for msg in client.get_chat_history(channel_id, limit=200):
-            if hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
-                messages.append(msg)
-                if len(messages) > 10:  # 防止过多消息
+        seen_ids = set()
+
+        # 如果有 center_msg_id，先获取它作为起点
+        if center_msg_id:
+            try:
+                center_msg = client.get_messages(channel_id, center_msg_id)
+                if center_msg and hasattr(center_msg, "media_group_id") and center_msg.media_group_id == media_group_id:
+                    messages.append(center_msg)
+                    seen_ids.add(center_msg.id)
+            except Exception:
+                pass
+
+        # 向后搜索：从 center_msg_id 开始向后遍历（消息ID增大的方向）
+        if center_msg_id:
+            for offset in range(1, 20):  # 最多向后搜索 20 条
+                msg_id = center_msg_id + offset
+                if msg_id in seen_ids:
+                    continue
+                try:
+                    msg = client.get_messages(channel_id, msg_id)
+                    if msg and hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
+                        messages.append(msg)
+                        seen_ids.add(msg_id)
+                    elif msg and (not hasattr(msg, "media_group_id") or msg.media_group_id is None):
+                        # 遇到非媒体组消息，停止向后搜索
+                        break
+                except Exception:
                     break
+
+        # 向前搜索：从 center_msg_id 开始向前搜索（消息ID减小的方向）
+        if center_msg_id:
+            for offset in range(1, 20):  # 最多向前搜索 20 条
+                msg_id = center_msg_id - offset
+                if msg_id in seen_ids or msg_id <= 0:
+                    continue
+                try:
+                    msg = client.get_messages(channel_id, msg_id)
+                    if msg and hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
+                        messages.append(msg)
+                        seen_ids.add(msg_id)
+                    elif msg and (not hasattr(msg, "media_group_id") or msg.media_group_id is None):
+                        # 遇到非媒体组消息，停止向前搜索
+                        break
+                except Exception:
+                    break
+        else:
+            # 没有 center_msg_id，回退到旧的遍历方式（取最新消息）
+            for msg in client.get_chat_history(channel_id, limit=100):
+                if hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
+                    if msg.id not in seen_ids:
+                        messages.append(msg)
+                        seen_ids.add(msg.id)
+                        if len(messages) >= 10:
+                            break
+
+        # 按 message_id 排序
+        messages.sort(key=lambda m: m.id)
         return messages
     except Exception:
         return []
@@ -354,7 +444,7 @@ def forward_messages_batch(
                     original_msg = _get_original_media_group_message(client, source_channel_id, msg_id)
                     if original_msg and original_msg.media_group_id:
                         # 媒体组消息，使用 send_media_group 转发
-                        media_group_msgs = _get_media_group_messages(client, source_channel_id, original_msg.media_group_id)
+                        media_group_msgs = _get_media_group_messages(client, source_channel_id, original_msg.media_group_id, msg_id)
                         if media_group_msgs:
                             # 有完整媒体组，转发整个组
                             if _forward_media_group(client, source_channel_id, target_id, media_group_msgs):
@@ -587,15 +677,16 @@ def main():
 
     # 分离链接和频道ID
     channel_ids = []
-    link_messages = []  # [(channel_id, message_id), ...]
+    link_messages = []  # [(channel_id, message_id, username), ...]
 
     for source in args.sources:
         parsed = parse_source_arg(source)
-        if parsed[0] is None:
+        if parsed[0] is None and parsed[2] is None:
+            # 无法解析，跳过
             continue
         if parsed[1] is not None:
             # 链接：直接转发，不递归
-            link_messages.append(parsed)
+            link_messages.append(parsed)  # (channel_id or None, message_id, username or None)
         else:
             channel_ids.append(parsed[0])
 
@@ -610,14 +701,22 @@ def main():
                 if join_channel(client, target_channel_id):
                     print(f"[FORWARD] 已加入目标频道 {target_channel_id}")
 
-            for channel_id, msg_id in link_messages:
+            for channel_id, msg_id, username in link_messages:
+                # 解析用户名（如果需要）
+                if channel_id is None and username:
+                    resolved_id = resolve_username_to_channel_id(client, username)
+                    if resolved_id is None:
+                        print(f"[ERROR] 无法解析用户名 {username}，跳过")
+                        continue
+                    channel_id = resolved_id
+
                 link = f"{get_channel_address(channel_id)}/{msg_id}"
                 try:
                     # 检查是否是媒体组消息
                     original_msg = _get_original_media_group_message(client, channel_id, msg_id)
                     if original_msg and original_msg.media_group_id:
                         # 媒体组消息，使用 send_media_group 转发
-                        media_group_msgs = _get_media_group_messages(client, channel_id, original_msg.media_group_id)
+                        media_group_msgs = _get_media_group_messages(client, channel_id, original_msg.media_group_id, msg_id)
                         if media_group_msgs:
                             # 有完整媒体组，转发整个组
                             if _forward_media_group(client, channel_id, target_channel_id, media_group_msgs):
