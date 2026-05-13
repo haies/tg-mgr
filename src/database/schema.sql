@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS messages (
     reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
     source_id INTEGER,  -- 存储转发来源的频道ID
     views INTEGER DEFAULT 0,  -- 浏览量
+    media_group_id TEXT,  -- 媒体组ID，用于标识同组媒体消息
     UNIQUE(message_id)
 );
 

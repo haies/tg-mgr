@@ -143,6 +143,9 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
             skipped += 1
             continue
 
+        # 获取媒体组ID
+        media_group_id = getattr(message, "media_group_id", None) or ""
+
         # Check for duplicates (skip for text messages - they don't have file_unique_id)
         if not is_text_message and media_info.file_unique_id in seen_files:
             duplicates.append(
@@ -175,6 +178,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
                     is_valid,
                     json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
                     source_id,
+                    media_group_id,
                 )
             )
             seen_files.add(media_info.file_unique_id)
@@ -196,16 +200,16 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
     if new_files:
         try:
             cursor.executemany(
-                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 new_files,
             )
         except sqlite3.IntegrityError:
             for new_file in new_files:
                 try:
                     cursor.execute(
-                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         new_file,
                     )
                 except sqlite3.IntegrityError:
@@ -339,30 +343,46 @@ def delete_message_safely(
         return False
 
 
+# 文件大小阈值：小于2MB视为小文件（垃圾消息判定用）
+JUNK_MEDIA_SIZE_THRESHOLD = 2 * 1024 * 1024  # 2MB
+
+
 def count_chinese_chars(text: str) -> int:
     """统计字符串中中文字符的数量"""
     return sum(1 for char in text if '一' <= char <= '鿿')
 
 
-def is_junk_message(text: str) -> bool:
+def is_junk_message(text: str, file_size: int | None = None, media_type: str | None = None) -> bool:
     """判断消息是否为垃圾消息
 
-    判定规则：
+    判定规则（同时满足）：
+    - 媒体类型为 photo 或 video
     - 30字以上中文 或 100字符以上英文
-    - 仅有 Telegram 消息链接（不含其他实质内容）
+    - 文件大小小于 2MB
     """
     if not text:
         return False
 
-    # 规则1：仅有链接的文字（不算垃圾，只有链接没有实质内容）
+    # 必须是有具体文字内容
     stripped = text.strip()
     links_only = TG_MSG_LINK_PATTERN.sub('', stripped).strip()
     if links_only == '' and TG_MSG_LINK_PATTERN.search(stripped):
         return False
 
-    # 规则2：长文字
+    # 规则：长文字
     chinese_count = count_chinese_chars(text)
-    return chinese_count >= 30 or len(text) >= 100
+    if not (chinese_count >= 30 or len(text) >= 100):
+        return False
+
+    # 规则：媒体类型必须为 photo 或 video
+    if media_type not in ('photo', 'video'):
+        return False
+
+    # 规则：文件大小必须小于 2MB
+    if file_size is not None and file_size >= JUNK_MEDIA_SIZE_THRESHOLD:
+        return False
+
+    return True
 
 
 def is_spam_text(text: str) -> bool:
@@ -389,19 +409,20 @@ def find_junk_messages(conn: sqlite3.Connection) -> list:
     """查找所有垃圾消息
 
     检测类型：
-    1. 媒体消息（photo/video）+ 长文字
+    1. 媒体消息（photo/video）+ 长文字 + 文件小于2MB + 非媒体组成员
     2. 纯文字消息 + 推广/引流关键词
     """
     cursor = conn.cursor()
 
-    # 类型1：媒体消息 + 长文字
+    # 类型1：photo/video 媒体消息 + 长文字（需要同时满足文字长度、文件大小条件，且不在媒体组中）
     cursor.execute("""
         SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
         FROM messages
         WHERE media_type IN ('photo', 'video')
         AND caption IS NOT NULL AND caption != ''
+        AND (media_group_id IS NULL OR media_group_id = '')
     """)
-    media_junk = [msg for msg in cursor.fetchall() if is_junk_message(msg[4])]
+    media_junk = [msg for msg in cursor.fetchall() if is_junk_message(msg[4], msg[2], msg[3])]
 
     # 类型2：纯文字消息 + 推广/引流关键词
     cursor.execute("""
@@ -445,27 +466,37 @@ def find_duplicates(conn: sqlite3.Connection) -> list:
     return duplicates
 
 
-def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> None:
+def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict[str, int]:
     """重复检测与清理流程
 
     Args:
         delete: 是否实际删除消息
         channel_id: 频道ID，如果为None则从配置文件读取
+
+    Returns:
+        按media_type统计的待清理消息数量 dict
     """
     config = get_config()
     _api_id = config["api_id"]
     _api_hash = config["api_hash"]
     _channel_id = channel_id if channel_id else config["channel_id"]
 
+    stats: dict[str, int] = {}
+
     with get_db() as conn:
         duplicates = find_duplicates(conn)
 
         if not duplicates:
             print("[CLEAN] 未检测到重复媒体")
-            return
+            return stats
 
         total_deleted = 0
         total_failed = 0
+
+        # 统计每种media_type的待删除数量
+        for _, media_type, _, delete_ids in duplicates:
+            key = media_type or "unknown"
+            stats[key] = stats.get(key, 0) + len(delete_ids)
 
         print(f"[CLEAN] 检测到 {len(duplicates)} 组重复媒体:")
         client = None
@@ -503,6 +534,8 @@ def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> None
             if client and client.is_connected:
                 client.stop()
 
+        return stats
+
 
 def find_invalid_messages(conn: sqlite3.Connection) -> list:
     """查找所有无效消息（is_valid = 0）"""
@@ -516,24 +549,34 @@ def find_invalid_messages(conn: sqlite3.Connection) -> list:
     return cursor.fetchall()
 
 
-def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> None:
+def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> dict[str, int]:
     """无效消息检测与清理流程
 
     Args:
         delete: 是否实际删除消息
         channel_id: 频道ID，如果为None则从配置文件读取
+
+    Returns:
+        按media_type统计的待清理消息数量 dict
     """
     config = get_config()
     _api_id = config["api_id"]
     _api_hash = config["api_hash"]
     _channel_id = channel_id if channel_id else config["channel_id"]
 
+    stats: dict[str, int] = {}
+
     with get_db() as conn:
         invalid_messages = find_invalid_messages(conn)
 
         if not invalid_messages:
             print("[CLEAN] 未检测到无效消息")
-            return
+            return stats
+
+        # 按media_type统计
+        for msg in invalid_messages:
+            media_type = msg[3] or "unknown"
+            stats[media_type] = stats.get(media_type, 0) + 1
 
         total_deleted = 0
         total_failed = 0
@@ -572,23 +615,35 @@ def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> None:
             if client and client.is_connected:
                 client.stop()
 
+        return stats
 
-def run_dejunk(delete: bool = False, channel_id: str | None = None) -> None:
+
+def run_dejunk(delete: bool = False, channel_id: str | None = None) -> dict[str, int]:
     """垃圾消息检测与清理流程
 
     Args:
         delete: 是否实际删除消息
         channel_id: 频道ID，如果为None则从配置文件读取
+
+    Returns:
+        按media_type统计的待清理消息数量 dict
     """
     config = get_config()
     _channel_id = channel_id if channel_id else config["channel_id"]
+
+    stats: dict[str, int] = {}
 
     with get_db() as conn:
         junk_messages = find_junk_messages(conn)
 
         if not junk_messages:
             print("[CLEAN] 未检测到垃圾消息")
-            return
+            return stats
+
+        # 按media_type统计
+        for msg in junk_messages:
+            media_type = msg[3] or "text"
+            stats[media_type] = stats.get(media_type, 0) + 1
 
         total_deleted = 0
         total_failed = 0
@@ -603,11 +658,10 @@ def run_dejunk(delete: bool = False, channel_id: str | None = None) -> None:
             for idx, msg in enumerate(junk_messages, 1):
                 msg_id, file_unique_id, file_size, media_type, caption, timestamp = msg
                 tg_link = generate_tg_link(_channel_id, msg_id)
+                size_kb = file_size // 1024 if file_size else 0
+                text_len = len(caption) if caption else 0
 
-                print(f"\n消息 #{idx} (ID: {msg_id}, {media_type}, {file_size} bytes):")
-                print(f"  - 链接: {tg_link}")
-                print(f"  - 文字长度: {len(caption)} 字")
-                print(f"  - 时间: {timestamp}")
+                print(f"  [{idx}] {tg_link} | {media_type} {size_kb}KB | 文字 {text_len} 字")
 
                 if delete:
                     success = delete_message_safely(client, conn, msg_id, _channel_id)
@@ -618,15 +672,53 @@ def run_dejunk(delete: bool = False, channel_id: str | None = None) -> None:
 
             if delete:
                 conn.commit()
-                print(
-                    f"\n[CLEAN] 清理完成 - 共处理 {len(junk_messages)} 条垃圾消息, 成功删除 {total_deleted} 条, 失败 {total_failed} 条"
-                )
+                print(f"[CLEAN] 清理完成，已删除 {total_deleted} 条")
             else:
-                print("\n[CLEAN] 检测完成")
+                pass  # 检测完成，不显示多余信息
 
         finally:
             if client and client.is_connected:
                 client.stop()
+
+        return stats
+
+
+def print_cleanup_stats(stats_by_type: dict[str, dict[str, int]], dry_run: bool) -> None:
+    """打印清理统计信息
+
+    Args:
+        stats_by_type: 按类型统计的结果 {"deduplicate": {...}, "deinvalid": {...}, "dejunk": {...}}
+        dry_run: 是否为预览模式（-y）
+    """
+    if not stats_by_type:
+        return
+
+    print(f"\n{'='*50}")
+    print("[CLEAN] 待清理消息分类统计:")
+    print(f"{'='*50}")
+
+    total_all = 0
+
+    type_labels = {
+        "deduplicate": "重复媒体",
+        "deinvalid": "无效消息",
+        "dejunk": "垃圾消息",
+    }
+
+    for op_type, stats in stats_by_type.items():
+        if not stats:
+            continue
+        label = type_labels.get(op_type, op_type)
+        type_total = sum(stats.values())
+        total_all += type_total
+        print(f"\n  {label}:")
+        for media_type, count in sorted(stats.items()):
+            print(f"    {media_type}: {count} 条")
+        print(f"    小计: {type_total} 条")
+
+    print(f"\n  总计: {total_all} 条")
+    if dry_run:
+        print("\n  (以上为预览模式，实际删除请去掉 -y 参数)")
 
 
 def main():
@@ -665,6 +757,9 @@ def main():
     # dry_run 模式（-y）影响所有删除操作
     dry_run = args.y
 
+    # 收集所有清理类型的统计
+    stats_by_type: dict[str, dict[str, int]] = {}
+
     # 对每个频道分别执行操作
     for channel in channels:
         print(f"\n{'='*50}")
@@ -680,16 +775,35 @@ def main():
 
         # 执行各项清理操作
         if args.d:
-            run_deduplicate(delete=not dry_run, channel_id=channel)
+            stats = run_deduplicate(delete=not dry_run, channel_id=channel)
+            if stats:
+                stats_by_type["deduplicate"] = stats
         if args.i:
-            run_deinvalid(delete=not dry_run, channel_id=channel)
+            stats = run_deinvalid(delete=not dry_run, channel_id=channel)
+            if stats:
+                stats_by_type["deinvalid"] = stats
         if args.s:
-            run_dejunk(delete=not dry_run, channel_id=channel)
+            stats = run_dejunk(delete=not dry_run, channel_id=channel)
+            if stats:
+                stats_by_type["dejunk"] = stats
 
         # 无清理参数时，只检测不删除
         if not args.d and not args.i and not args.s:
-            run_deduplicate(delete=False, channel_id=channel)
-            run_deinvalid(delete=False, channel_id=channel)
+            dedup_stats = run_deduplicate(delete=False, channel_id=channel)
+            invalid_stats = run_deinvalid(delete=False, channel_id=channel)
+            junk_stats = run_dejunk(delete=False, channel_id=channel)
+
+            # 汇总统计
+            if dedup_stats:
+                stats_by_type["deduplicate"] = dedup_stats
+            if invalid_stats:
+                stats_by_type["deinvalid"] = invalid_stats
+            if junk_stats:
+                stats_by_type["dejunk"] = junk_stats
+
+    # -y 模式下打印汇总统计
+    if dry_run:
+        print_cleanup_stats(stats_by_type, dry_run)
 
 
 if __name__ == "__main__":
