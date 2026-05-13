@@ -23,6 +23,7 @@ import time
 from typing import Any
 
 from pyrogram import Client, errors
+from pyrogram.types import InputMedia, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation, Message
 
 from database import get_database_path, get_db_connection
 from database.query import (
@@ -54,8 +55,10 @@ def parse_source_arg(arg: str) -> tuple[int | None, int | None]:
     link_pattern = r"https?://t\.me/c/(\d+)/(\d+)"
     match = re.match(link_pattern, arg)
     if match:
-        channel_id = int("-" + match.group(1))
+        raw_id = int(match.group(1))
         message_id = int(match.group(2))
+        # t.me/c/xxxx/ 中的 xxxx 是超级群 ID，需要加 -100 前缀
+        channel_id = -(raw_id + 1000000000000) if raw_id < 100000000000 else -raw_id
         return (channel_id, message_id)
 
     # 纯数字频道ID
@@ -169,11 +172,21 @@ def forward_single_message(
         True if successful, False otherwise
     """
     try:
-        client.copy_message(
-            chat_id=target_channel_id,
-            from_chat_id=source_channel_id,
-            message_id=message_id,
-        )
+        # 检查是否是媒体组的一部分
+        group_msg = _get_original_media_group_message(client, source_channel_id, message_id)
+        if group_msg and group_msg.media_group_id:
+            # 媒体组：使用 send_media_group 转发
+            media_group_messages = _get_media_group_messages(
+                client, source_channel_id, group_msg.media_group_id
+            )
+            return _forward_media_group(client, source_channel_id, target_channel_id, media_group_messages)
+        else:
+            # 普通消息：直接复制
+            client.copy_message(
+                chat_id=target_channel_id,
+                from_chat_id=source_channel_id,
+                message_id=message_id,
+            )
         return True
     except errors.FloodWait as e:
         wait = max(e.value, 5)
@@ -183,6 +196,110 @@ def forward_single_message(
         return False
     except Exception:
         return False
+
+
+def _get_original_media_group_message(
+    client: Client, channel_id: int, message_id: int
+) -> Message | None:
+    """获取消息所在的媒体组原消息"""
+    try:
+        # 先调用 get_chat 建立会话，解决 CHAT_ID_INVALID 问题
+        client.get_chat(channel_id)
+        msgs = client.get_messages(channel_id, message_id)
+        return msgs
+    except Exception:
+        return None
+
+
+def _get_media_group_messages(
+    client: Client, channel_id: int, media_group_id: str
+) -> list[Message]:
+    """获取媒体组的所有消息"""
+    try:
+        # 先调用 get_chat 建立会话
+        client.get_chat(channel_id)
+        messages = []
+        # 需要获取该媒体组的所有消息
+        # 通过遍历频道历史找到同一 media_group_id 的消息
+        for msg in client.get_chat_history(channel_id, limit=200):
+            if hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
+                messages.append(msg)
+                if len(messages) > 10:  # 防止过多消息
+                    break
+        return messages
+    except Exception:
+        return []
+
+
+def _forward_media_group(
+    client: Client,
+    source_channel_id: int,
+    target_channel_id: int,
+    messages: list[Message],
+) -> bool:
+    """转发媒体组
+
+    Args:
+        client: Telegram 客户端
+        source_channel_id: 源频道ID
+        target_channel_id: 目标频道ID
+        messages: 媒体组消息列表
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not messages:
+        return False
+
+    # 按 message_id 排序确保顺序正确
+    messages = sorted(messages, key=lambda m: m.id)
+
+    # 准备媒体组输入
+    media_list = []
+    for msg in messages:
+        media_input = _prepare_media_for_send(msg)
+        if media_input:
+            media_list.append(media_input)
+
+    if not media_list:
+        return False
+
+    try:
+        client.send_media_group(target_channel_id, media_list)
+        return True
+    except errors.FloodWait as e:
+        wait = max(e.value, 5)
+        time.sleep(wait)
+        return False
+    except Exception:
+        return False
+
+
+def _prepare_media_for_send(message: Message) -> InputMedia | None:
+    """准备消息用于 send_media_group，返回正确的 InputMedia 类型"""
+    try:
+        caption = message.caption or ""
+        if message.photo:
+            return InputMediaPhoto(message.photo.file_id, caption=caption)
+        elif message.video:
+            return InputMediaVideo(message.video.file_id, caption=caption)
+        elif message.document:
+            return InputMediaDocument(message.document.file_id, caption=caption)
+        elif message.audio:
+            return InputMediaAudio(message.audio.file_id, caption=caption)
+        elif message.animation:
+            return InputMediaAnimation(message.animation.file_id, caption=caption)
+        elif message.voice:
+            # voice 和 video_note 不支持媒体组，使用 InputMedia
+            return InputMedia(message.voice.file_id, caption=caption)
+        elif message.video_note:
+            return InputMedia(message.video_note.file_id, caption=caption)
+        elif message.text:
+            # 纯文本消息不是媒体组的一部分
+            return None
+        return None
+    except Exception:
+        return None
 
 
 def forward_messages_batch(
@@ -233,13 +350,37 @@ def forward_messages_batch(
                         continue
 
                 try:
-                    client.copy_message(
-                        chat_id=target_id,
-                        from_chat_id=source_channel_id,
-                        message_id=msg_id,
-                    )
-                    forwarded += 1
-                    print(f"[FORWARD] 转发成功: {link} -> {target_id}")
+                    # 检查是否是媒体组消息
+                    original_msg = _get_original_media_group_message(client, source_channel_id, msg_id)
+                    if original_msg and original_msg.media_group_id:
+                        # 媒体组消息，使用 send_media_group 转发
+                        media_group_msgs = _get_media_group_messages(client, source_channel_id, original_msg.media_group_id)
+                        if media_group_msgs:
+                            # 有完整媒体组，转发整个组
+                            if _forward_media_group(client, source_channel_id, target_id, media_group_msgs):
+                                forwarded += 1
+                                print(f"[FORWARD] 转发成功(媒体组): {link} -> {target_id}")
+                            else:
+                                failed += 1
+                                continue
+                        else:
+                            # 媒体组消息但找不到其他同组消息，降级为 copy_message
+                            client.copy_message(
+                                chat_id=target_id,
+                                from_chat_id=source_channel_id,
+                                message_id=msg_id,
+                            )
+                            forwarded += 1
+                            print(f"[FORWARD] 转发成功(媒体组降级): {link} -> {target_id}")
+                    else:
+                        # 普通消息，使用 copy_message
+                        client.copy_message(
+                            chat_id=target_id,
+                            from_chat_id=source_channel_id,
+                            message_id=msg_id,
+                        )
+                        forwarded += 1
+                        print(f"[FORWARD] 转发成功: {link} -> {target_id}")
 
                     # 写入日志
                     if write_date:
@@ -438,7 +579,7 @@ def main():
     target_channel_id = args.target if args.target else config.get("channel_id")
 
     if not target_channel_id:
-        print("[ERROR] 未指定目标频道，且config.json中未配置channel_id")
+        print("[ERROR] 未指定目标频道，且环境变量 TG_CHANNEL_ID 未配置")
         sys.exit(1)
 
     # 解析递归深度
@@ -462,15 +603,43 @@ def main():
     if link_messages:
         print(f"[FORWARD] 处理 {len(link_messages)} 条直接转发...")
         with get_client("tg-mgr") as client:
+            # 确保已加入目标频道
+            try:
+                client.get_chat(target_channel_id)
+            except Exception:
+                if join_channel(client, target_channel_id):
+                    print(f"[FORWARD] 已加入目标频道 {target_channel_id}")
+
             for channel_id, msg_id in link_messages:
                 link = f"{get_channel_address(channel_id)}/{msg_id}"
                 try:
-                    client.copy_message(
-                        chat_id=target_channel_id,
-                        from_chat_id=channel_id,
-                        message_id=msg_id,
-                    )
-                    print(f"[FORWARD] 直接转发成功: {link}")
+                    # 检查是否是媒体组消息
+                    original_msg = _get_original_media_group_message(client, channel_id, msg_id)
+                    if original_msg and original_msg.media_group_id:
+                        # 媒体组消息，使用 send_media_group 转发
+                        media_group_msgs = _get_media_group_messages(client, channel_id, original_msg.media_group_id)
+                        if media_group_msgs:
+                            # 有完整媒体组，转发整个组
+                            if _forward_media_group(client, channel_id, target_channel_id, media_group_msgs):
+                                print(f"[FORWARD] 直接转发成功(媒体组): {link}")
+                            else:
+                                print(f"[FORWARD] 直接转发失败(媒体组): {link}")
+                        else:
+                            # 媒体组消息但找不到其他同组消息，降级为 copy_message
+                            client.copy_message(
+                                chat_id=target_channel_id,
+                                from_chat_id=channel_id,
+                                message_id=msg_id,
+                            )
+                            print(f"[FORWARD] 直接转发成功(媒体组降级): {link}")
+                    else:
+                        # 普通消息，使用 copy_message
+                        client.copy_message(
+                            chat_id=target_channel_id,
+                            from_chat_id=channel_id,
+                            message_id=msg_id,
+                        )
+                        print(f"[FORWARD] 直接转发成功: {link}")
                 except Exception as e:
                     print(f"[FORWARD] 直接转发失败: {link} - {e}")
 

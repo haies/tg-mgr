@@ -21,6 +21,7 @@
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -31,6 +32,13 @@ from database import get_database_path, get_db, get_schema_path
 from utils.media import extract_media_info, extract_reaction_data, extract_source_id
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import generate_tg_link
+
+# Telegram 消息链接正则 (t.me/c/123/456 或 t.me/username/123)
+TG_MSG_LINK_PATTERN = re.compile(
+    r'(?:https?://)?(?:t\.me|telegram\.me|telegramdog\.com)/'
+    r'(?:c/\d+/\d+|[\w_]+/\d+)',
+    re.IGNORECASE
+)
 
 # ====== SYNC FUNCTIONALITY ======
 
@@ -127,13 +135,16 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
         # 使用共享函数提取媒体信息
         media_info = extract_media_info(message)
 
-        # Skip if no valid file_unique_id
-        if not media_info.file_unique_id or media_info.file_unique_id == "":
+        # 检查是否为纯文字消息（无媒体）
+        is_text_message = media_info.media_type == "text" and not media_info.file_unique_id
+
+        # Skip media messages without valid file_unique_id
+        if not is_text_message and (not media_info.file_unique_id or media_info.file_unique_id == ""):
             skipped += 1
             continue
 
-        # Check for duplicates
-        if media_info.file_unique_id in seen_files:
+        # Check for duplicates (skip for text messages - they don't have file_unique_id)
+        if not is_text_message and media_info.file_unique_id in seen_files:
             duplicates.append(
                 (message.id, media_info.file_unique_id, media_info.file_size, media_info.media_type)
             )
@@ -150,10 +161,13 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
             # 提取消息文本
             caption = message.caption or message.text or ""
 
+            # 对于文字消息，使用空字符串作为 file_unique_id
+            file_unique_id = media_info.file_unique_id if media_info.file_unique_id else ""
+
             new_files.append(
                 (
                     message.id,
-                    media_info.file_unique_id,
+                    file_unique_id,
                     media_info.file_size,
                     media_info.media_type,
                     caption,
@@ -331,27 +345,74 @@ def count_chinese_chars(text: str) -> int:
 
 
 def is_junk_message(text: str) -> bool:
-    """判断消息是否为垃圾消息：单图/视频 + 长文字
+    """判断消息是否为垃圾消息
 
     判定规则：
     - 30字以上中文 或 100字符以上英文
+    - 仅有 Telegram 消息链接（不含其他实质内容）
     """
+    if not text:
+        return False
+
+    # 规则1：仅有链接的文字（不算垃圾，只有链接没有实质内容）
+    stripped = text.strip()
+    links_only = TG_MSG_LINK_PATTERN.sub('', stripped).strip()
+    if links_only == '' and TG_MSG_LINK_PATTERN.search(stripped):
+        return False
+
+    # 规则2：长文字
     chinese_count = count_chinese_chars(text)
     return chinese_count >= 30 or len(text) >= 100
 
 
+def is_spam_text(text: str) -> bool:
+    """检测纯文字消息是否为垃圾
+
+    判定规则：
+    - 所有纯文字消息都算垃圾（不论长短）
+    - 排除仅包含 Telegram 消息链接的文字
+    """
+    if not text:
+        return False
+
+    # 排除仅包含链接的文字
+    stripped = text.strip()
+    links_only = TG_MSG_LINK_PATTERN.sub('', stripped).strip()
+    if links_only == '' and TG_MSG_LINK_PATTERN.search(stripped):
+        return False
+
+    # 所有非空的纯文字消息都算垃圾
+    return True
+
+
 def find_junk_messages(conn: sqlite3.Connection) -> list:
-    """查找所有垃圾消息（单图/视频+长文字）"""
+    """查找所有垃圾消息
+
+    检测类型：
+    1. 媒体消息（photo/video）+ 长文字
+    2. 纯文字消息 + 推广/引流关键词
+    """
     cursor = conn.cursor()
+
+    # 类型1：媒体消息 + 长文字
     cursor.execute("""
         SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
         FROM messages
         WHERE media_type IN ('photo', 'video')
         AND caption IS NOT NULL AND caption != ''
     """)
-    messages = cursor.fetchall()
-    # 应用层过滤：判断文字长度是否达到垃圾标准
-    return [msg for msg in messages if is_junk_message(msg[4])]
+    media_junk = [msg for msg in cursor.fetchall() if is_junk_message(msg[4])]
+
+    # 类型2：纯文字消息 + 推广/引流关键词
+    cursor.execute("""
+        SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
+        FROM messages
+        WHERE (media_type IS NULL OR media_type = 'text' OR media_type = '')
+        AND caption IS NOT NULL AND caption != ''
+    """)
+    text_junk = [msg for msg in cursor.fetchall() if is_spam_text(msg[4])]
+
+    return media_junk + text_junk
 
 
 def find_duplicates(conn: sqlite3.Connection) -> list:
@@ -571,12 +632,12 @@ def run_dejunk(delete: bool = False, channel_id: str | None = None) -> None:
 def main():
     """主执行流程"""
     parser = argparse.ArgumentParser(description="Telegram 清理工具")
-    parser.add_argument("-d", action="store_true", help="去重模式")
-    parser.add_argument("-i", action="store_true", help="清理无效消息模式")
-    parser.add_argument("-u", action="store_true", help="强制同步消息（断点续传）")
-    parser.add_argument("-s", action="store_true", help="清理垃圾消息模式（单图/视频+长文字）")
-    parser.add_argument("-y", action="store_true", help="仅列出待删除消息，不执行删除")
-    parser.add_argument("-f", action="store_true", help="强制重置数据库")
+    parser.add_argument("-d", action="store_true", help="去重（检测并删除重复媒体消息）")
+    parser.add_argument("-u", action="store_true", help="强制同步消息到数据库（断点续传）")
+    parser.add_argument("-i", action="store_true", help="清理无效消息（受限制无法显示的消息）")
+    parser.add_argument("-s", action="store_true", help="清理垃圾消息（长文字媒体或推广引流纯文字）")
+    parser.add_argument("-y", action="store_true", help="仅列出待删除消息，不实际删除")
+    parser.add_argument("-f", action="store_true", help="强制重置数据库（清空后重新同步）")
     parser.add_argument("channels", nargs="*", default=None, help="指定要清理的频道ID（可选）")
     args = parser.parse_args()
 
