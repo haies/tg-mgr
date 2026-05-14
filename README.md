@@ -4,13 +4,15 @@ A Telegram channel management tool based on Pyrogram, supporting message synchro
 
 ## Features
 
-- **Sync**: Incremental message synchronization with progress tracking
+- **Sync**: Incremental message synchronization with breakpoint resume
 - **Deduplicate**: Detect and remove duplicate media files
-- **Clean**: Remove invalid/restricted messages
+- **Clean**: Remove invalid/restricted messages and junk messages
 - **Filter**: Filter media by file size (e.g., >1GB or <1MB)
 - **Export**: Export messages to Telegram Desktop format (JSON + HTML)
 - **Info**: Analyze channel statistics (forward sources, high-reaction messages)
 - **Forward**: Copy high-reaction messages between channels
+- **init**: Interactive setup wizard
+- **sessions**: Session file management
 
 ## Installation
 
@@ -71,9 +73,21 @@ tg <module> [args]
 tg clean              # Sync only
 tg clean -d           # Sync + deduplicate
 tg clean -i           # Sync + cleanup invalid
-tg clean -diu         # Sync + deduplicate + cleanup
+tg clean -s           # Sync + cleanup junk messages
+tg clean -di          # Sync + deduplicate + cleanup invalid
+tg clean -dis         # Sync + deduplicate + invalid + junk
+tg clean -y           # Preview mode (list only, no delete)
 tg clean -f           # Force reset database
+tg clean -u           # Force sync (breakpoint resume)
+tg clean <channel1> <channel2>  # Multi-channel cleanup
 ```
+
+**Junk Message Detection:**
+- Media (photo/video) + long text (>30 Chinese or >100 chars) + file <2MB
+- Plain text messages (all considered junk)
+- Media group messages are excluded from cleanup
+
+**Preview Mode (-y):** Lists all pending deletions by type with media type breakdown before actual cleanup.
 
 ### filter - Media Size Filter
 
@@ -109,7 +123,13 @@ tg info -1001234567890 20   # Top 20 high-reaction messages
 tg forward -1001234567890                       # To default target
 tg forward -1001234567890 -o -100555666777     # Specify target
 tg forward -1001234567890 -c                   # Check mode
+tg forward https://t.me/username/123            # Via username link
 ```
+
+**Features:**
+- High-reaction message filtering (likes + hearts threshold)
+- Media group support (bidirectional search for complete groups)
+- Recursive depth forwarding with message link preservation
 
 ### init - Interactive Setup
 
