@@ -181,6 +181,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
                     json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
                     source_id,
                     media_group_id,
+                    media_info.views,
                 )
             )
             seen_files.add(media_info.file_unique_id)
@@ -202,16 +203,16 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
     if new_files:
         try:
             cursor.executemany(
-                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id, views) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 new_files,
             )
         except sqlite3.IntegrityError:
             for new_file in new_files:
                 try:
                     cursor.execute(
-                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id, views) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         new_file,
                     )
                 except sqlite3.IntegrityError:

@@ -110,24 +110,29 @@ def extract_reaction_data(message: types.Message) -> ReactionData:
     """
     从 Message 对象提取反应数据
 
+    统计所有 reactions 而非只限 👍 和 ❤️，
+    这样可以正确显示任何 emoji 类型的反应。
+
     Args:
         message: Telegram Message 对象
 
     Returns:
-        ReactionData 包含 positive, heart, total
+        ReactionData 包含 positive, heart, total（total 是所有反应之和）
     """
     positive_count = 0
     heart_count = 0
+    total_count = 0
 
     if hasattr(message, "reactions") and message.reactions:
         for reaction in message.reactions.reactions:
+            total_count += reaction.count
             if reaction.emoji == "👍":
                 positive_count += reaction.count
             elif reaction.emoji in ["❤️", "❤"]:
                 heart_count += reaction.count
 
     return ReactionData(
-        positive=positive_count, heart=heart_count, total=positive_count + heart_count
+        positive=positive_count, heart=heart_count, total=total_count
     )
 
 
