@@ -78,11 +78,14 @@ def is_interactive():
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def get_config():
+def get_config() -> dict:
     """获取配置
 
     敏感信息(api_id, api_hash, bot_token, channel_id)从环境变量读取（.env 文件），
     其他配置从 config.json 读取。
+
+    Returns:
+        配置字典，包含 api_id, api_hash, bot_token, channel_id 及 config.json 中的配置
     """
     config_path = get_config_path()
 

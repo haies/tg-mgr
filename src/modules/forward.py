@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 # 默认递归深度
 DEFAULT_RECURSION_DEPTH = 5
 
+# 媒体组搜索偏移量上限
+MAX_MEDIA_GROUP_SEARCH_OFFSET = 20
+
 
 def parse_source_arg(arg: str) -> tuple[int | None, int | None, str | None]:
     """解析参数为 (channel_id, message_id, username)
@@ -188,6 +191,7 @@ def forward_single_message(
     source_channel_id: int,
     target_channel_id: int,
     message_id: int,
+    force: bool = False,
 ) -> bool:
     """转发单条消息
 
@@ -196,6 +200,7 @@ def forward_single_message(
         source_channel_id: 源频道ID
         target_channel_id: 目标频道ID
         message_id: 消息ID
+        force: 是否强制转发（忽略限制）
 
     Returns:
         True if successful, False otherwise
@@ -208,7 +213,7 @@ def forward_single_message(
             media_group_messages = _get_media_group_messages(
                 client, source_channel_id, group_msg.media_group_id, message_id
             )
-            return _forward_media_group(client, source_channel_id, target_channel_id, media_group_messages)
+            return _forward_media_group(client, source_channel_id, target_channel_id, media_group_messages, force=force)
         else:
             # 普通消息：直接复制
             client.copy_message(
@@ -221,9 +226,10 @@ def forward_single_message(
         wait = max(e.value, 5)
         time.sleep(wait)
         return False
-    except (errors.Forbidden, errors.BadRequest):
+    except (errors.Forbidden, errors.BadRequest) as e:
         return False
-    except Exception:
+    except Exception as e:
+        logger.debug(f"转发消息失败: {e}")
         return False
 
 
@@ -273,7 +279,7 @@ def _get_media_group_messages(
 
         # 向后搜索：从 center_msg_id 开始向后遍历（消息ID增大的方向）
         if center_msg_id:
-            for offset in range(1, 20):  # 最多向后搜索 20 条
+            for offset in range(1, MAX_MEDIA_GROUP_SEARCH_OFFSET + 1):  # 最多向后搜索 20 条
                 msg_id = center_msg_id + offset
                 if msg_id in seen_ids:
                     continue
@@ -290,7 +296,7 @@ def _get_media_group_messages(
 
         # 向前搜索：从 center_msg_id 开始向前搜索（消息ID减小的方向）
         if center_msg_id:
-            for offset in range(1, 20):  # 最多向前搜索 20 条
+            for offset in range(1, MAX_MEDIA_GROUP_SEARCH_OFFSET + 1):  # 最多向前搜索 20 条
                 msg_id = center_msg_id - offset
                 if msg_id in seen_ids or msg_id <= 0:
                     continue
@@ -326,6 +332,7 @@ def _forward_media_group(
     source_channel_id: int,
     target_channel_id: int,
     messages: list[Message],
+    force: bool = False,
 ) -> bool:
     """转发媒体组
 
@@ -334,6 +341,7 @@ def _forward_media_group(
         source_channel_id: 源频道ID
         target_channel_id: 目标频道ID
         messages: 媒体组消息列表
+        force: 是否强制转发（忽略限制）
 
     Returns:
         True if successful, False otherwise
@@ -361,7 +369,8 @@ def _forward_media_group(
         wait = max(e.value, 5)
         time.sleep(wait)
         return False
-    except Exception:
+    except Exception as e:
+        logger.debug(f"媒体组转发失败: {e}")
         return False
 
 
@@ -388,8 +397,185 @@ def _prepare_media_for_send(message: Message) -> InputMedia | None:
             # 纯文本消息不是媒体组的一部分
             return None
         return None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"准备媒体发送失败: {e}")
         return None
+
+
+def _get_download_dir() -> str:
+    """获取下载目录，默认为 ~/.tg-mgr/downloads/"""
+    from utils.telegram_client import get_config
+    import os
+
+    config_dir = os.path.expanduser("~/.tg-mgr")
+    download_dir = os.path.join(config_dir, "downloads")
+    os.makedirs(download_dir, exist_ok=True)
+    return download_dir
+
+
+def _download_with_resume(client: Client, message: Message, target_path: str, max_retries: int = 3) -> str | None:
+    """下载媒体文件，支持断点续传和重试
+
+    Args:
+        client: Telegram 客户端
+        message: 源消息
+        target_path: 目标文件路径
+        max_retries: 最大重试次数
+
+    Returns:
+        下载完成的文件路径，失败返回 None
+    """
+    import os
+    import time
+
+    # 获取文件信息
+    file_size = 0
+    if hasattr(message, 'video') and message.video:
+        file_size = message.video.file_size
+    elif hasattr(message, 'document') and message.document:
+        file_size = message.document.file_size
+    elif hasattr(message, 'photo') and message.photo:
+        file_size = getattr(message.photo, 'file_size', 0)
+    elif hasattr(message, 'audio') and message.audio:
+        file_size = message.audio.file_size
+    elif hasattr(message, 'animation') and message.animation:
+        file_size = message.animation.file_size
+
+    print(f"[DOWNLOAD] 文件大小: {file_size / 1024 / 1024:.1f} MB")
+
+    for attempt in range(max_retries):
+        try:
+            # 检查已下载的部分
+            downloaded_size = 0
+            if os.path.exists(target_path):
+                downloaded_size = os.path.getsize(target_path)
+                if downloaded_size >= file_size:
+                    print(f"[DOWNLOAD] 文件已完整下载: {downloaded_size} bytes")
+                    return target_path
+                print(f"[DOWNLOAD] 断点续传: 已下载 {downloaded_size / 1024 / 1024:.1f} MB，继续...")
+
+            # 使用 Pyrogram 的下载功能
+            # 添加进度回调
+            def progress(current, total):
+                if total > 0:
+                    pct = current / total * 100
+                    if current % (1024 * 1024 * 10) == 0:  # 每10MB打印一次
+                        print(f"[DOWNLOAD] 进度: {current / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB ({pct:.1f}%)")
+
+            result_path = client.download_media(
+                message,
+                file_name=target_path,
+                progress=progress
+            )
+
+            # 验证下载完整性
+            if result_path and os.path.exists(result_path):
+                final_size = os.path.getsize(result_path)
+                if file_size > 0 and final_size < file_size * 0.95:  # 允许5%误差
+                    print(f"[DOWNLOAD] 下载不完整: {final_size} / {file_size} bytes，重试...")
+                    continue
+                print(f"[DOWNLOAD] 下载完成: {final_size / 1024 / 1024:.1f} MB")
+                return result_path
+
+        except Exception as e:
+            print(f"[DOWNLOAD] 下载失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 5
+                print(f"[DOWNLOAD] 等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+
+    return None
+
+
+def _force_send_single_message(client: Client, target_channel_id: int, message: Message, download_dir: str | None = None) -> bool:
+    """强制发送单条消息（绕过转发限制）
+
+    使用下载-上传方式，支持断点续传和重试机制
+
+    Args:
+        client: Telegram 客户端
+        target_channel_id: 目标频道ID
+        message: 源消息
+        download_dir: 下载目录，默认为 ~/.tg-mgr/downloads/
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import os
+    import time
+
+    try:
+        caption = message.caption or ""
+
+        # 确定下载目录
+        if download_dir is None:
+            download_dir = _get_download_dir()
+
+        # 生成临时文件路径
+        # 根据媒体类型确定扩展名
+        ext = ""
+        if message.video:
+            ext = ".mp4"
+        elif message.document:
+            ext = os.path.splitext(message.document.file_name)[1] if message.document.file_name else ""
+        elif message.photo:
+            ext = ".jpg"
+        elif message.audio:
+            ext = ".mp3"
+        elif message.animation:
+            ext = ".gif"
+
+        temp_filename = f"force_forward_{message.chat.id}_{message.id}{ext}"
+        temp_path = os.path.join(download_dir, temp_filename)
+
+        # 下载（支持断点续传和重试）
+        downloaded_path = _download_with_resume(client, message, temp_path, max_retries=3)
+
+        if not downloaded_path or not os.path.exists(downloaded_path):
+            print(f"[FORWARD] 下载失败，无法发送")
+            return False
+
+        print(f"[FORWARD] 发送媒体: {downloaded_path}")
+
+        # 根据媒体类型发送（上传本地文件）
+        for attempt in range(3):
+            try:
+                if message.photo:
+                    client.send_photo(chat_id=target_channel_id, photo=downloaded_path, caption=caption)
+                elif message.video:
+                    client.send_video(chat_id=target_channel_id, video=downloaded_path, caption=caption)
+                elif message.document:
+                    client.send_document(chat_id=target_channel_id, document=downloaded_path, caption=caption)
+                elif message.animation:
+                    client.send_animation(chat_id=target_channel_id, animation=downloaded_path, caption=caption)
+                elif message.audio:
+                    client.send_audio(chat_id=target_channel_id, audio=downloaded_path, caption=caption)
+                elif message.voice:
+                    client.send_voice(chat_id=target_channel_id, voice=downloaded_path, caption=caption)
+                elif message.video_note:
+                    client.send_video_note(chat_id=target_channel_id, video_note=downloaded_path)
+                elif message.text:
+                    client.send_message(chat_id=target_channel_id, text=message.text)
+                else:
+                    return False
+
+                print(f"[FORWARD] 发送成功")
+                return True
+
+            except Exception as e:
+                print(f"[FORWARD] 发送失败 (尝试 {attempt + 1}/3): {e}")
+                if attempt < 2:
+                    wait_time = (attempt + 1) * 5
+                    print(f"[FORWARD] 等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+
+        # 发送失败，保留文件以便下次续传
+        print(f"[FORWARD] 发送多次失败，文件保留在: {downloaded_path}")
+        return False
+
+    except Exception as e:
+        print(f"[FORWARD] 强制发送异常: {e}")
+        return False
 
 
 def forward_messages_batch(
@@ -397,6 +583,7 @@ def forward_messages_batch(
     target_channel_ids: list[int],
     messages: list[dict[str, Any]],
     check_exists: bool = False,
+    force: bool = False,
 ) -> tuple[int, int, int]:
     """批量转发消息
 
@@ -405,14 +592,12 @@ def forward_messages_batch(
         target_channel_ids: 目标频道ID列表
         messages: 要转发的消息列表
         check_exists: 是否检查消息是否存在
+        force: 是否强制转发（忽略限制）
 
     Returns:
         (forwarded, skipped, failed)
     """
-    from datetime import datetime
-
     log_file = get_log_path("forward.log")
-    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_date = not log_file.exists()
 
     forwarded = 0
@@ -474,8 +659,9 @@ def forward_messages_batch(
 
                     # 写入日志
                     if write_date:
+                        from datetime import datetime
                         with open(log_file, "w") as f:
-                            f.write(f"{today}\n")
+                            f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n")
                         write_date = False
                     with open(log_file, "a") as f:
                         f.write(f"{link}\n")
@@ -488,6 +674,10 @@ def forward_messages_batch(
                         print(f"[FORWARD] 频道 {target_id} 需要管理员权限")
                         break
                     if "CHAT_FORWARDS_RESTRICTED" in str(e):
+                        if force:
+                            print(f"[FORWARD] 频道 {target_id} 禁止转发（force模式，跳过）")
+                            skipped += 1
+                            continue
                         print(f"[FORWARD] 频道 {target_id} 禁止转发内容")
                         break
                     print(f"[FORWARD] 转发失败: {link} - {e}")
@@ -517,6 +707,7 @@ def forward_with_recursion(
     max_depth: int = DEFAULT_RECURSION_DEPTH,
     processed_channels: set[int] | None = None,
     check_exists: bool = False,
+    force: bool = False,
 ) -> tuple[int, int, int]:
     """递归转发高反应消息
 
@@ -527,6 +718,7 @@ def forward_with_recursion(
         max_depth: 最大深度
         processed_channels: 已处理的频道集合
         check_exists: 是否检查消息是否存在
+        force: 是否强制转发（忽略限制）
 
     Returns:
         (total_forwarded, total_skipped, total_failed)
@@ -547,12 +739,13 @@ def forward_with_recursion(
             print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 已处理过，跳过")
             continue
 
-        # 检查频道转发权限
+        # 检查频道转发权限（force模式跳过）
         print(f"[FORWARD] 深度 {current_depth}: 检查频道 {channel_id}...")
-        with get_client("tg-mgr") as client:
-            if not is_channel_forwarding_allowed(client, channel_id):
-                print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 禁止转发，跳过")
-                continue
+        if not force:
+            with get_client("tg-mgr") as client:
+                if not is_channel_forwarding_allowed(client, channel_id):
+                    print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 禁止转发，跳过")
+                    continue
 
         # 同步频道数据
         print(f"[FORWARD] 深度 {current_depth}: 同步频道 {channel_id}...")
@@ -575,7 +768,7 @@ def forward_with_recursion(
 
         if messages:
             # 转发到目标
-            f, s, fa = forward_messages_batch(channel_id, [target_channel], messages, check_exists)
+            f, s, fa = forward_messages_batch(channel_id, [target_channel], messages, check_exists, force)
             total_forwarded += f
             total_skipped += s
             total_failed += fa
@@ -592,6 +785,7 @@ def forward_with_recursion(
                         max_depth,
                         processed_channels,
                         check_exists,
+                        force,
                     )
                     total_forwarded += nf
                     total_skipped += ns
@@ -662,6 +856,8 @@ def main():
         "-r", "--depth", type=int, nargs="?", const=DEFAULT_RECURSION_DEPTH, default=None,
         help=f"递归深度（-r3 或 -r 3，默认{DEFAULT_RECURSION_DEPTH}，0表示不递归）"
     )
+    parser.add_argument("-f", "--force", action="store_true",
+        help="强制转发禁止转发的消息（通过复制内容而非转发）")
 
     args = parser.parse_args()
 
@@ -693,6 +889,7 @@ def main():
     # 处理链接参数（直接转发，不递归）
     if link_messages:
         print(f"[FORWARD] 处理 {len(link_messages)} 条直接转发...")
+        force = args.force
         with get_client("tg-mgr") as client:
             # 确保已加入目标频道
             try:
@@ -715,30 +912,41 @@ def main():
                     # 检查是否是媒体组消息
                     original_msg = _get_original_media_group_message(client, channel_id, msg_id)
                     if original_msg and original_msg.media_group_id:
-                        # 媒体组消息，使用 send_media_group 转发
+                        # 媒体组消息
                         media_group_msgs = _get_media_group_messages(client, channel_id, original_msg.media_group_id, msg_id)
                         if media_group_msgs:
-                            # 有完整媒体组，转发整个组
-                            if _forward_media_group(client, channel_id, target_channel_id, media_group_msgs):
-                                print(f"[FORWARD] 直接转发成功(媒体组): {link}")
-                            else:
-                                print(f"[FORWARD] 直接转发失败(媒体组): {link}")
+                            # 有完整媒体组，尝试转发
+                            try:
+                                if _forward_media_group(client, channel_id, target_channel_id, media_group_msgs, force=force):
+                                    print(f"[FORWARD] 直接转发成功(媒体组): {link}")
+                                else:
+                                    print(f"[FORWARD] 直接转发失败(媒体组): {link}")
+                            except errors.BadRequest as e:
+                                if "CHAT_FORWARDS_RESTRICTED" in str(e) and force:
+                                    # force 模式：降级为逐条发送
+                                    print(f"[FORWARD] 媒体组受限，降级为逐条发送...")
+                                    for m in media_group_msgs:
+                                        _force_send_single_message(client, target_channel_id, m)
+                                    print(f"[FORWARD] 强制转发成功(媒体组降级): {link}")
+                                else:
+                                    raise
                         else:
-                            # 媒体组消息但找不到其他同组消息，降级为 copy_message
+                            # 媒体组消息但找不到其他同组消息，降级为重新发送
+                            _force_send_single_message(client, target_channel_id, original_msg)
+                            print(f"[FORWARD] 直接转发成功(媒体组降级): {link}")
+                    else:
+                        # 普通消息
+                        if force:
+                            _force_send_single_message(client, target_channel_id, original_msg)
+                            print(f"[FORWARD] 强制转发成功: {link}")
+                        else:
+                            # 普通消息，使用 copy_message
                             client.copy_message(
                                 chat_id=target_channel_id,
                                 from_chat_id=channel_id,
                                 message_id=msg_id,
                             )
-                            print(f"[FORWARD] 直接转发成功(媒体组降级): {link}")
-                    else:
-                        # 普通消息，使用 copy_message
-                        client.copy_message(
-                            chat_id=target_channel_id,
-                            from_chat_id=channel_id,
-                            message_id=msg_id,
-                        )
-                        print(f"[FORWARD] 直接转发成功: {link}")
+                            print(f"[FORWARD] 直接转发成功: {link}")
                 except Exception as e:
                     print(f"[FORWARD] 直接转发失败: {link} - {e}")
 
@@ -750,9 +958,9 @@ def main():
             for channel_id in channel_ids:
                 print(f"[FORWARD] ========== 处理频道: {channel_id} ==========")
 
-                # 检查权限
+                # 检查权限（force模式跳过）
                 with get_client("tg-mgr") as client:
-                    if not is_channel_forwarding_allowed(client, channel_id):
+                    if not args.force and not is_channel_forwarding_allowed(client, channel_id):
                         print(f"[FORWARD] 频道 {channel_id} 禁止转发，跳过")
                         continue
 
@@ -773,7 +981,7 @@ def main():
                 else:
                     print(f"[FORWARD] 频道 {channel_id} 找到 0 条消息")
                 if messages:
-                    f, s, fa = forward_messages_batch(channel_id, [target_channel_id], messages, args.check)
+                    f, s, fa = forward_messages_batch(channel_id, [target_channel_id], messages, args.check, args.force)
                     print(f"[FORWARD] 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")
                 conn.close()
         else:
@@ -785,6 +993,7 @@ def main():
                 current_depth=1,
                 max_depth=recursion_depth,
                 check_exists=args.check,
+                force=args.force,
             )
             print("\n[FORWARD] ========== 全部完成 ==========")
             print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")

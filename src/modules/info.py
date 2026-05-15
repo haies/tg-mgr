@@ -4,7 +4,11 @@ from typing import Any
 from pyrogram import errors
 
 from database import get_db
-from database.query import find_high_reaction_messages, get_forward_sources
+from database.query import (
+    find_messages_by_views,
+    find_reaction_messages_over_threshold,
+    get_forward_sources,
+)
 from utils.media import row_to_reaction_dict
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import get_channel_address
@@ -53,13 +57,13 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
         )
 
         forward_sources = []
-        missing_ids = []
+        missing_ids = set()
         for row in forwarding_results:
             if row[0] in channel_cache:
                 channel_name = channel_cache[row[0]]
             else:
                 channel_name = None
-                missing_ids.append(row[0])
+                missing_ids.add(row[0])
 
             forward_sources.append(
                 {
@@ -98,12 +102,16 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
             if source["name"] is None:
                 source["name"] = channel_cache.get(source["id"], "无名")
 
-        # 获取高反应消息
-        reaction_results = find_high_reaction_messages(conn, min_total=0, limit=reaction_limit)
-
+        # 获取高反应消息（统一为 forward 逻辑）
+        reaction_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=reaction_limit)
         reactions = [row_to_reaction_dict(row) for row in reaction_results]
 
-    return {"forward_sources": forward_sources, "reactions": reactions}
+        # 获取高浏览量消息（统一为 forward 逻辑：views > 0）
+        view_limit = reaction_limit  # 复用 reaction_limit 作为 views limit
+        view_results = find_messages_by_views(conn, min_views=1, limit=view_limit)
+        top_views = [{"message_id": row[0], "views": row[1]} for row in view_results]
+
+    return {"forward_sources": forward_sources, "reactions": reactions, "top_views": top_views}
 
 
 def main():
@@ -128,6 +136,11 @@ def main():
         print("\n转发来源TOP:")
         for item in result["forward_sources"]:
             print(f"{item['name']}\t{item['id']}\t{item['address']}\t{item['count']}")
+
+        print("\n浏览量TOP:")
+        for item in result["top_views"]:
+            message_address = f"{get_channel_address(args.channel_id)}/{item['message_id']}"
+            print(f"{item['views']}\t{message_address}")
 
         print("\n高反应消息TOP:")
         for item in result["reactions"]:

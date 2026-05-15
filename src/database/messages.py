@@ -30,6 +30,7 @@ def init_database(conn: sqlite3.Connection) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON messages(media_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_valid ON messages(is_valid)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_duplicate ON messages(is_duplicate)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)")
 
     conn.commit()
 
@@ -185,29 +186,49 @@ def update_message_duplicate(conn: sqlite3.Connection, message_id: int) -> None:
 
 
 def find_duplicates(conn: sqlite3.Connection) -> list:
-    """查找所有重复媒体组（基于文件唯一ID）"""
+    """查找所有重复媒体组（基于文件唯一ID）
+
+    使用窗口函数在单次查询中获取所有待删除消息ID，避免 N+1 问题
+    """
     cursor = conn.cursor()
+
+    # 使用窗口函数一次性获取所有重复消息
     cursor.execute("""
-        SELECT file_unique_id, MAX(file_size), MIN(media_type), MIN(message_id) as keep_id
-        FROM messages
+        WITH RankedMessages AS (
+            SELECT
+                message_id,
+                file_unique_id,
+                file_size,
+                media_type,
+                timestamp,
+                ROW_NUMBER() OVER (
+                    PARTITION BY file_unique_id
+                    ORDER BY timestamp ASC
+                ) as rn
+            FROM messages
+            WHERE file_unique_id IS NOT NULL AND file_unique_id != ''
+        )
+        SELECT
+            file_unique_id,
+            MAX(file_size) as file_size,
+            MIN(media_type) as media_type,
+            MAX(CASE WHEN rn = 1 THEN message_id END) as keep_id,
+            GROUP_CONCAT(CASE WHEN rn > 1 THEN message_id END) as delete_ids
+        FROM RankedMessages
+        WHERE rn > 1 OR (
+            (SELECT COUNT(*) FROM messages m2 WHERE m2.file_unique_id = RankedMessages.file_unique_id) > 1
+            AND rn = 1
+        )
         GROUP BY file_unique_id
-        HAVING COUNT(*) > 1 AND file_unique_id != ''
+        HAVING COUNT(*) > 0 AND delete_ids IS NOT NULL
     """)
 
     duplicates = []
-    for file_unique_id, file_size, media_type, keep_id in cursor.fetchall():
-        cursor.execute(
-            """
-            SELECT message_id
-            FROM messages
-            WHERE file_unique_id = ? AND message_id != ?
-            ORDER BY timestamp ASC
-        """,
-            (file_unique_id, keep_id),
-        )
-
-        delete_ids = [row[0] for row in cursor.fetchall()]
-        duplicates.append((file_size, media_type, keep_id, delete_ids))
+    for row in cursor.fetchall():
+        file_unique_id, file_size, media_type, keep_id, delete_ids_str = row
+        if delete_ids_str:
+            delete_ids = [int(x) for x in delete_ids_str.split(',')]
+            duplicates.append((file_size, media_type, keep_id, delete_ids))
 
     return duplicates
 

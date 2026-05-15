@@ -22,13 +22,14 @@
 import argparse
 import json
 import re
+import signal
 import sqlite3
 import sys
 import time
 
 from pyrogram import Client, errors, types
 
-from database import get_database_path, get_db, get_schema_path
+from database import get_database_path, get_schema_path
 from utils.media import extract_media_info, extract_reaction_data, extract_source_id
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import generate_tg_link
@@ -68,6 +69,7 @@ def init_database() -> sqlite3.Connection:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON messages(media_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_valid ON messages(is_valid)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_duplicate ON messages(is_duplicate)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)")
 
     conn.commit()
     return conn
@@ -230,79 +232,100 @@ def run_sync(channel_id: str | None = None) -> None:
     _api_hash = config["api_hash"]
     _channel_id = channel_id if channel_id else config["channel_id"]
 
+    # 验证 channel_id 格式
+    if not _channel_id:
+        raise ValueError("channel_id is required but not provided")
+    _channel_id_str = str(_channel_id)
+    if not (_channel_id_str.startswith("-100") or _channel_id_str.lstrip("-").isdigit()):
+        raise ValueError(f"Invalid channel_id format: {_channel_id}")
+
     conn = init_database()
-    last_processed_id = get_last_processed_id(conn)
+    try:
+        last_processed_id = get_last_processed_id(conn)
 
-    with get_client("tg-mgr") as client:
-        start_time = time.time()
-        print(f"[SYNC] 开始同步，从消息ID #{last_processed_id + 1} 开始...")
-        print(f"[DEBUG] CHANNEL_ID: {_channel_id}")
+        # 信号处理：优雅关闭
+        shutdown_requested = False
+        def signal_handler(signum, frame):
+            nonlocal shutdown_requested
+            print("\n[SIGNAL] 收到中断信号，正在优雅关闭...")
+            shutdown_requested = True
 
-        # 初始化已处理文件集合，包含数据库中已存在的文件
-        seen_files = set()
-        cursor = conn.cursor()
-        cursor.execute("SELECT file_unique_id, message_id FROM messages WHERE is_duplicate = 0")
-        for file_unique_id, message_id in cursor.fetchall():
-            seen_files.add(file_unique_id)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
-        # 初始化计数器
-        total_messages = 0
-        total_skipped = 0
+        with get_client("tg-mgr") as client:
+            start_time = time.time()
+            print(f"[SYNC] 开始同步，从消息ID #{last_processed_id + 1} 开始...")
+            print(f"[DEBUG] CHANNEL_ID: {_channel_id}")
 
-        # 同步消息并传递 seen_files 集合
-        batch_size = 100
-        offset_id = last_processed_id
-        has_more = True
+            # 初始化已处理文件集合，包含数据库中已存在的文件
+            seen_files = set()
+            cursor = conn.cursor()
+            cursor.execute("SELECT file_unique_id, message_id FROM messages WHERE is_duplicate = 0")
+            for file_unique_id, message_id in cursor.fetchall():
+                seen_files.add(file_unique_id)
 
-        while has_more:
-            batch_messages = []
-            try:
-                for message in client.get_chat_history(
-                    _channel_id, offset_id=offset_id, limit=batch_size
-                ):
-                    batch_messages.append(message)
-                    offset_id = message.id
-            except (errors.ChannelPrivate, errors.ChannelInvalid, errors.ChatForbidden):
-                print(f"[SYNC] 频道 {_channel_id} 无法访问")
-                break
+            # 初始化计数器
+            total_messages = 0
+            total_skipped = 0
 
-            if not batch_messages:
-                has_more = False
-                break
+            # 同步消息并传递 seen_files 集合
+            batch_size = 100
+            offset_id = last_processed_id
+            has_more = True
 
-            batch_skipped = process_batch(client, conn, batch_messages, seen_files)
-            total_messages += len(batch_messages)
-            total_skipped += batch_skipped
-            print(f"[SYNC] 处理进度 - 总消息数: {total_messages}\r", end="", flush=True)
+            while has_more and not shutdown_requested:
+                batch_messages = []
+                try:
+                    for message in client.get_chat_history(
+                        _channel_id, offset_id=offset_id, limit=batch_size
+                    ):
+                        if shutdown_requested:
+                            break
+                        batch_messages.append(message)
+                        offset_id = message.id
+                except (errors.ChannelPrivate, errors.ChannelInvalid, errors.ChatForbidden):
+                    print(f"[SYNC] 频道 {_channel_id} 无法访问")
+                    break
 
-        # 统计各类消息数量
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                media_type,
-                COUNT(*) as total,
-                SUM(is_valid=0) as invalid_count,
-                SUM(is_duplicate=1) as duplicate_count
-            FROM messages
-            GROUP BY media_type
-        """)
-        stats = cursor.fetchall()
+                if not batch_messages:
+                    has_more = False
+                    break
 
-        print("\n[SYNC] 消息数量统计:")
-        for media_type, total, invalid_count, duplicate_count in stats:
-            print(f"  {media_type}: {total}")
-            if invalid_count:
-                print(f"    - 无效数量: {invalid_count}")
-            if duplicate_count:
-                print(f"    - 重复数量: {duplicate_count}")
+                batch_skipped = process_batch(client, conn, batch_messages, seen_files)
+                total_messages += len(batch_messages)
+                total_skipped += batch_skipped
+                print(f"[SYNC] 处理进度 - 总消息数: {total_messages}\r", end="", flush=True)
 
-        if total_skipped > 0:
-            print(f"  跳过（无file_unique_id）: {total_skipped}")
+            # 统计各类消息数量
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    media_type,
+                    COUNT(*) as total,
+                    SUM(is_valid=0) as invalid_count,
+                    SUM(is_duplicate=1) as duplicate_count
+                FROM messages
+                GROUP BY media_type
+            """)
+            stats = cursor.fetchall()
 
+            print("\n[SYNC] 消息数量统计:")
+            for media_type, total, invalid_count, duplicate_count in stats:
+                print(f"  {media_type}: {total}")
+                if invalid_count:
+                    print(f"    - 无效数量: {invalid_count}")
+                if duplicate_count:
+                    print(f"    - 重复数量: {duplicate_count}")
+
+            if total_skipped > 0:
+                print(f"  跳过（无file_unique_id）: {total_skipped}")
+
+            end_time = time.time()
+            duration = end_time - start_time
+            print(f"[SYNC] 同步完成，耗时: {duration:.2f} 秒")
+    finally:
         conn.close()
-        end_time = time.time()
-        duration = end_time - start_time
-        print(f"[SYNC] 同步完成，耗时: {duration:.2f} 秒")
 
 
 def exponential_backoff(retry_count: int, retry_delay_base: int) -> float:
@@ -318,29 +341,30 @@ def delete_message_safely(
     max_retries = config["max_retries"]
     retry_delay_base = config["retry_delay_base"]
 
-    try:
-        client.delete_messages(channel_id, message_id)
-        print(f"    [CLEAN] 已从Telegram删除消息 #{message_id}")
+    while retry_count < max_retries:
+        try:
+            client.delete_messages(channel_id, message_id)
+            print(f"    [CLEAN] 已从Telegram删除消息 #{message_id}")
 
-        # 更新数据库中的 is_duplicate 标志
-        cursor = conn.cursor()
-        cursor.execute("UPDATE messages SET is_duplicate = 1 WHERE message_id = ?", (message_id,))
-        return True
-    except errors.FloodWait as e:
-        wait_time = max(e.value, 5)
-        print(f"    [WARNING] FloodWait: 等待 {wait_time} 秒后重试...")
-        time.sleep(wait_time)
-        return delete_message_safely(client, conn, message_id, channel_id, retry_count + 1)
-    except Exception as e:
-        if retry_count < max_retries:
+            # 更新数据库中的 is_duplicate 标志
+            cursor = conn.cursor()
+            cursor.execute("UPDATE messages SET is_duplicate = 1 WHERE message_id = ?", (message_id,))
+            return True
+        except errors.FloodWait as e:
+            wait_time = max(e.value, 5)
+            print(f"    [WARNING] FloodWait: 等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
+            retry_count += 1
+        except Exception as e:
             wait_time = exponential_backoff(retry_count, retry_delay_base)
             print(
-                f"    [WARNING] 删除消息 #{message_id} 失败: {str(e)} - {retry_count + 1}/{max_retries} 次重试 (等待 {wait_time:.1f} 秒)"
+                f"    [WARNING] 删除消息 #{message_id} 失败: {e} - {retry_count + 1}/{max_retries} 次重试 (等待 {wait_time:.1f} 秒)"
             )
             time.sleep(wait_time)
-            return delete_message_safely(client, conn, message_id, channel_id, retry_count + 1)
-        print(f"    [ERROR] 删除消息 #{message_id} 失败: {str(e)}")
-        return False
+            retry_count += 1
+
+    print(f"    [ERROR] 删除消息 #{message_id} 失败，已达到最大重试次数")
+    return False
 
 
 # 文件大小阈值：小于2MB视为小文件（垃圾消息判定用）
@@ -437,31 +461,51 @@ def find_junk_messages(conn: sqlite3.Connection) -> list:
 
 
 def find_duplicates(conn: sqlite3.Connection) -> list:
-    """查找所有重复媒体组（基于文件唯一ID）"""
+    """查找所有重复媒体组（基于文件唯一ID）
+
+    使用窗口函数在单次查询中获取所有待删除消息ID，避免 N+1 问题
+    """
     cursor = conn.cursor()
-    # 使用与清理脚本相同的分组逻辑（file_unique_id）
+
+    # 使用窗口函数一次性获取所有重复消息
+    # ROW_NUMBER() 按 file_unique_id 分组，按 timestamp 排序
+    # rn = 1 表示保留的消息，rn > 1 表示待删除
     cursor.execute("""
-        SELECT file_unique_id, MAX(file_size), MIN(media_type), MIN(message_id) as keep_id
-        FROM messages
+        WITH RankedMessages AS (
+            SELECT
+                message_id,
+                file_unique_id,
+                file_size,
+                media_type,
+                timestamp,
+                ROW_NUMBER() OVER (
+                    PARTITION BY file_unique_id
+                    ORDER BY timestamp ASC
+                ) as rn
+            FROM messages
+            WHERE file_unique_id IS NOT NULL AND file_unique_id != ''
+        )
+        SELECT
+            file_unique_id,
+            MAX(file_size) as file_size,
+            MIN(media_type) as media_type,
+            MAX(CASE WHEN rn = 1 THEN message_id END) as keep_id,
+            GROUP_CONCAT(CASE WHEN rn > 1 THEN message_id END) as delete_ids
+        FROM RankedMessages
+        WHERE rn > 1 OR (
+            (SELECT COUNT(*) FROM messages m2 WHERE m2.file_unique_id = RankedMessages.file_unique_id) > 1
+            AND rn = 1
+        )
         GROUP BY file_unique_id
-        HAVING COUNT(*) > 1 AND file_unique_id != ''
+        HAVING COUNT(*) > 0 AND delete_ids IS NOT NULL
     """)
 
     duplicates = []
-    for file_unique_id, file_size, media_type, keep_id in cursor.fetchall():
-        # 按时间排序获取消息ID列表（排除保留ID）
-        cursor.execute(
-            """
-            SELECT message_id
-            FROM messages
-            WHERE file_unique_id = ? AND message_id != ?
-            ORDER BY timestamp ASC
-        """,
-            (file_unique_id, keep_id),
-        )
-
-        delete_ids = [row[0] for row in cursor.fetchall()]
-        duplicates.append((file_size, media_type, keep_id, delete_ids))
+    for row in cursor.fetchall():
+        file_unique_id, file_size, media_type, keep_id, delete_ids_str = row
+        if delete_ids_str:
+            delete_ids = [int(x) for x in delete_ids_str.split(',')]
+            duplicates.append((file_size, media_type, keep_id, delete_ids))
 
     return duplicates
 

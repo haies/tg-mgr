@@ -54,77 +54,77 @@ def _sync_impl(_channel_id: str) -> None:
     db_path = get_database_path()
 
     conn = sqlite3.connect(str(db_path))
-
-    # 执行 schema
-    with open(schema_path) as f:
-        cursor = conn.cursor()
-        cursor.executescript(f.read())
-
-    # 初始化数据库
-    init_database(conn)
-
-    last_processed_id = get_last_processed_id(conn)
-
-    with get_client("tg-mgr") as client:
-        start_time = time.time()
-        print(f"[SYNC] 开始同步，从消息ID #{last_processed_id + 1} 开始...")
-        print(f"[DEBUG] CHANNEL_ID: {_channel_id}")
-
-        # 初始化已处理文件集合
-        seen_files = get_existing_files(conn)
-
-        # 初始化计数器
-        total_messages = 0
-        total_skipped = 0
-
-        # 同步消息
-        batch_size = 100
-        offset_id = last_processed_id
-        has_more = True
-
-        from pyrogram import errors
-
-        while has_more:
-            batch_messages = []
-            try:
-                for message in client.get_chat_history(
-                    _channel_id, offset_id=offset_id, limit=batch_size
-                ):
-                    batch_messages.append(message)
-                    offset_id = message.id
-            except (errors.ChannelPrivate, errors.ChannelInvalid, errors.ChatForbidden):
-                print(f"[SYNC] 频道 {_channel_id} 无法访问")
-                break
-
-            if not batch_messages:
-                has_more = False
-                break
-
+    try:
+        # 执行 schema
+        with open(schema_path) as f:
             cursor = conn.cursor()
-            _, _, batch_skipped = insert_messages(cursor, batch_messages, seen_files)
-            total_messages += len(batch_messages)
-            total_skipped += batch_skipped
-            print(f"[SYNC] 处理进度 - 总消息数: {total_messages}\r", end="", flush=True)
+            cursor.executescript(f.read())
 
-        # 统计各类消息数量
-        stats = get_message_stats(conn)
+        # 初始化数据库
+        init_database(conn)
 
-        print("\n[SYNC] 消息数量统计:")
-        for media_type, total, invalid_count, duplicate_count in stats:
-            print(f"  {media_type}: {total}")
-            if invalid_count:
-                print(f"    - 无效数量: {invalid_count}")
-            if duplicate_count:
-                print(f"    - 重复数量: {duplicate_count}")
+        last_processed_id = get_last_processed_id(conn)
 
-        if total_skipped > 0:
-            print(f"  跳过（无file_unique_id）: {total_skipped}")
+        with get_client("tg-mgr") as client:
+            start_time = time.time()
+            print(f"[SYNC] 开始同步，从消息ID #{last_processed_id + 1} 开始...")
+            print(f"[DEBUG] CHANNEL_ID: {_channel_id}")
 
-        conn.commit()
+            # 初始化已处理文件集合
+            seen_files = get_existing_files(conn)
+
+            # 初始化计数器
+            total_messages = 0
+            total_skipped = 0
+
+            # 同步消息
+            batch_size = 100
+            offset_id = last_processed_id
+            has_more = True
+
+            from pyrogram import errors
+
+            while has_more:
+                batch_messages = []
+                try:
+                    for message in client.get_chat_history(
+                        _channel_id, offset_id=offset_id, limit=batch_size
+                    ):
+                        batch_messages.append(message)
+                        offset_id = message.id
+                except (errors.ChannelPrivate, errors.ChannelInvalid, errors.ChatForbidden):
+                    print(f"[SYNC] 频道 {_channel_id} 无法访问")
+                    break
+
+                if not batch_messages:
+                    has_more = False
+                    break
+
+                cursor = conn.cursor()
+                _, _, batch_skipped = insert_messages(cursor, batch_messages, seen_files)
+                total_messages += len(batch_messages)
+                total_skipped += batch_skipped
+                print(f"[SYNC] 处理进度 - 总消息数: {total_messages}\r", end="", flush=True)
+
+            # 统计各类消息数量
+            stats = get_message_stats(conn)
+
+            print("\n[SYNC] 消息数量统计:")
+            for media_type, total, invalid_count, duplicate_count in stats:
+                print(f"  {media_type}: {total}")
+                if invalid_count:
+                    print(f"    - 无效数量: {invalid_count}")
+                if duplicate_count:
+                    print(f"    - 重复数量: {duplicate_count}")
+
+            if total_skipped > 0:
+                print(f"  跳过（无file_unique_id）: {total_skipped}")
+
+            end_time = time.time()
+            duration = end_time - start_time
+            print(f"[SYNC] 同步完成，耗时: {duration:.2f} 秒")
+    finally:
         conn.close()
-        end_time = time.time()
-        duration = end_time - start_time
-        print(f"[SYNC] 同步完成，耗时: {duration:.2f} 秒")
 
 
 def run_sync(channel_id: str | None = None) -> None:

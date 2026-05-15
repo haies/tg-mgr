@@ -27,3 +27,6 @@ CREATE INDEX IF NOT EXISTS idx_file_unique_id ON messages(file_unique_id);
 
 -- 消息ID索引（用于快速查找）
 CREATE INDEX IF NOT EXISTS idx_message_id ON messages(message_id);
+
+-- timestamp 索引（用于排序查询和断点续传）
+CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);

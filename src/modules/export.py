@@ -276,10 +276,10 @@ def export_html_telegram_desktop_style(messages: list[dict], channel_info: dict,
         msg_html, prev_date = generate_message_html(msg, prev_date)
         messages_html_parts.append(msg_html)
 
-    # 使用 string.Template 避免 CSS 花括号转义问题
+    # 使用 string.Template 的 safe_substitute 避免缺失占位符导致 KeyError
     from string import Template
 
-    html_content = Template(html_template).substitute(
+    html_content = Template(html_template).safe_substitute(
         channel_name=channel_info.get("title", "Unknown Channel"),
         message_count=len(messages),
         export_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
