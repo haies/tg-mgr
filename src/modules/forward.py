@@ -23,7 +23,15 @@ import time
 from typing import Any
 
 from pyrogram import Client, errors
-from pyrogram.types import InputMedia, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation, Message
+from pyrogram.types import (
+    InputMedia,
+    InputMediaAnimation,
+    InputMediaAudio,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+)
 
 from database import get_database_path, get_db_connection
 from database.query import (
@@ -226,7 +234,7 @@ def forward_single_message(
         wait = max(e.value, 5)
         time.sleep(wait)
         return False
-    except (errors.Forbidden, errors.BadRequest) as e:
+    except (errors.Forbidden, errors.BadRequest):
         return False
     except Exception as e:
         logger.debug(f"转发消息失败: {e}")
@@ -404,7 +412,6 @@ def _prepare_media_for_send(message: Message) -> InputMedia | None:
 
 def _get_download_dir() -> str:
     """获取下载目录，默认为 ~/.tg-mgr/downloads/"""
-    from utils.telegram_client import get_config
     import os
 
     config_dir = os.path.expanduser("~/.tg-mgr")
@@ -532,7 +539,7 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
         downloaded_path = _download_with_resume(client, message, temp_path, max_retries=3)
 
         if not downloaded_path or not os.path.exists(downloaded_path):
-            print(f"[FORWARD] 下载失败，无法发送")
+            print("[FORWARD] 下载失败，无法发送")
             return False
 
         print(f"[FORWARD] 发送媒体: {downloaded_path}")
@@ -559,7 +566,7 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
                 else:
                     return False
 
-                print(f"[FORWARD] 发送成功")
+                print("[FORWARD] 发送成功")
                 return True
 
             except Exception as e:
@@ -924,7 +931,7 @@ def main():
                             except errors.BadRequest as e:
                                 if "CHAT_FORWARDS_RESTRICTED" in str(e) and force:
                                     # force 模式：降级为逐条发送
-                                    print(f"[FORWARD] 媒体组受限，降级为逐条发送...")
+                                    print("[FORWARD] 媒体组受限，降级为逐条发送...")
                                     for m in media_group_msgs:
                                         _force_send_single_message(client, target_channel_id, m)
                                     print(f"[FORWARD] 强制转发成功(媒体组降级): {link}")

@@ -29,7 +29,7 @@ import time
 
 from pyrogram import Client, errors, types
 
-from database import get_database_path, get_schema_path
+from database import get_database_path, get_db, get_schema_path
 from utils.media import extract_media_info, extract_reaction_data, extract_source_id
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import generate_tg_link

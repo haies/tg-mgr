@@ -90,7 +90,7 @@ class TestAnalyzeChannel:
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
-             patch('modules.info.find_high_reaction_messages') as mock_reactions:
+             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions:
 
             mock_config.return_value = {
                 'forward_limit': 10,
@@ -121,7 +121,7 @@ class TestAnalyzeChannel:
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
-             patch('modules.info.find_high_reaction_messages') as mock_reactions:
+             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions:
 
             mock_config.return_value = {
                 'forward_limit': 10,
@@ -156,7 +156,7 @@ class TestAnalyzeChannel:
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
-             patch('modules.info.find_high_reaction_messages') as mock_reactions:
+             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions:
 
             mock_config.return_value = {
                 'forward_limit': 10,
