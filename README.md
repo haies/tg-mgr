@@ -5,12 +5,12 @@ A Telegram channel management tool based on Pyrogram, supporting message synchro
 ## Features
 
 - **Sync**: Incremental message synchronization with breakpoint resume
-- **Deduplicate**: Detect and remove duplicate media files
-- **Clean**: Remove invalid/restricted messages and junk messages
+- **Deduplicate**: Detect and remove duplicate media files (window function optimization)
+- **Clean**: Remove invalid/restricted messages and junk messages with signal handling
 - **Filter**: Filter media by file size (e.g., >1GB or <1MB)
 - **Export**: Export messages to Telegram Desktop format (JSON + HTML)
-- **Info**: Analyze channel statistics (forward sources, high-reaction messages)
-- **Forward**: Copy high-reaction messages between channels
+- **Info**: Analyze channel statistics (forward sources, high-reaction messages, top views)
+- **Forward**: Copy high-reaction messages between channels with recursive depth and force mode
 - **init**: Interactive setup wizard
 - **sessions**: Session file management
 
@@ -117,6 +117,11 @@ tg info -1001234567890      # Analyze specific channel
 tg info -1001234567890 20   # Top 20 high-reaction messages
 ```
 
+**Analysis Output:**
+- Forward sources (where messages are forwarded from)
+- Top views (highest view count messages)
+- High-reaction messages (likes + hearts)
+
 ### forward - Message Forwarding
 
 ```bash
@@ -124,12 +129,16 @@ tg forward -1001234567890                       # To default target
 tg forward -1001234567890 -o -100555666777     # Specify target
 tg forward -1001234567890 -c                   # Check mode
 tg forward https://t.me/username/123            # Via username link
+tg forward -1001234567890 -r 3                  # Recursive depth 3
+tg forward -1001234567890 -f                    # Force mode (bypass restrictions)
 ```
 
 **Features:**
 - High-reaction message filtering (likes + hearts threshold)
 - Media group support (bidirectional search for complete groups)
-- Recursive depth forwarding with message link preservation
+- Recursive depth forwarding with message link preservation (-r)
+- Force mode for restricted channels (-f, downloads and re-uploads content)
+- Direct message link forwarding (preserves original message)
 
 ### init - Interactive Setup
 
@@ -142,6 +151,33 @@ tg init    # Interactive configuration wizard
 ```bash
 tg sessions    # List and manage Telegram sessions
 ```
+
+---
+
+## Database Schema
+
+SQLite database at `~/.tg-mgr/tmp/database/messages.db`
+
+```sql
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL,
+    file_unique_id TEXT NOT NULL,
+    file_size INTEGER,
+    media_type TEXT,
+    caption TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_duplicate BOOLEAN DEFAULT 0,
+    is_valid BOOLEAN DEFAULT 1,
+    reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
+    source_id INTEGER,
+    views INTEGER DEFAULT 0,
+    media_group_id TEXT,
+    UNIQUE(message_id)
+);
+```
+
+**Indexes:** file_unique_id, media_type, is_valid, is_duplicate, timestamp, message_id, reactions, file_size
 
 ---
 
