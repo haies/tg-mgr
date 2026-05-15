@@ -106,7 +106,7 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
         reaction_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=reaction_limit)
         reactions = [row_to_reaction_dict(row) for row in reaction_results]
 
-        # 获取高浏览量消息（统一为 forward 逻辑：views > 0）
+        # 获取高浏览量消息（views > 0）
         view_limit = reaction_limit  # 复用 reaction_limit 作为 views limit
         view_results = find_messages_by_views(conn, min_views=1, limit=view_limit)
         top_views = [{"message_id": row[0], "views": row[1]} for row in view_results]

@@ -59,15 +59,21 @@ def find_reaction_messages_over_threshold(
     """
     查询超过阈值的高反应消息
 
+    使用 WHERE total > threshold 确保只返回有实际反应的消息。
+
     Args:
         conn: 数据库连接
-        threshold: 反应总数阈值，默认50
+        threshold: 反应总数阈值，默认50。0表示 total > 0
         limit: 返回条数上限，None表示无限制
 
     Returns:
         [(message_id, positive, heart, total), ...]
     """
     cursor = conn.cursor()
+
+    # threshold=0 转为 threshold=1，确保 total > 0
+    effective_threshold = max(1, threshold)
+
     if limit is not None:
         cursor.execute(
             f"""
@@ -77,7 +83,7 @@ def find_reaction_messages_over_threshold(
             ORDER BY total DESC
             LIMIT ?
             """,
-            (threshold, limit),
+            (effective_threshold, limit),
         )
     else:
         cursor.execute(
@@ -87,7 +93,7 @@ def find_reaction_messages_over_threshold(
             WHERE total > ?
             ORDER BY total DESC
             """,
-            (threshold,),
+            (effective_threshold,),
         )
     return cursor.fetchall()
 
