@@ -97,6 +97,51 @@ def summarize_messages_for_forward(
     }
 
 
+def confirm_forward(
+    messages: list[dict[str, Any]],
+    summary: dict[str, Any]
+) -> bool:
+    """显示统计摘要并询问确认
+
+    Args:
+        messages: 消息列表
+        summary: 统计结果 from summarize_messages_for_forward
+
+    Returns:
+        True if user confirms with 'y', False otherwise
+    """
+    if not messages:
+        return False
+
+    total_count = summary.get("total_count", 0)
+    media_count = summary.get("media_count", 0)
+    total_size_mb = summary.get("total_size_mb", 0.0)
+
+    # 大小分级提示
+    if total_size_mb < 10:
+        size_level = "小（<10MB）"
+    elif total_size_mb < 100:
+        size_level = "中等（10MB-100MB）"
+    elif total_size_mb < 500:
+        size_level = "较大（100MB-500MB）"
+    else:
+        size_level = "大（>500MB）"
+
+    print(f"[FORWARD] 待转发消息统计：")
+    print(f"  - 消息条数：{total_count} 条")
+    print(f"  - 有媒体：{media_count} 条")
+    print(f"  - 媒体累计大小：{total_size_mb:.1f} MB")
+    print(f"  - 预估大小级别：{size_level}")
+    print()
+
+    try:
+        response = input(f"媒体累计大小 {total_size_mb:.1f}MB，是否继续转发？[y/N] ").strip().lower()
+        return response == "y"
+    except (EOFError, KeyboardInterrupt):
+        print("\n[FORWARD] 已取消")
+        return False
+
+
 def parse_source_arg(arg: str) -> tuple[int | None, int | None, str | None]:
     """解析参数为 (channel_id, message_id, username)
 

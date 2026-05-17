@@ -48,6 +48,39 @@ class TestSummarizeMessagesForForward:
         conn.close()
 
 
+class TestConfirmForward:
+    """测试 confirm_forward 函数"""
+
+    def test_confirm_forward_yes(self):
+        """用户输入 y 返回 True"""
+        from unittest.mock import patch
+        from modules.forward import confirm_forward
+
+        messages = [{"message_id": 1}, {"message_id": 2}]
+        summary = {"total_count": 2, "media_count": 2, "total_size_mb": 30.0}
+        with patch("builtins.input", return_value="y"):
+            result = confirm_forward(messages, summary)
+        assert result is True
+
+    def test_confirm_forward_no(self):
+        """用户输入 n 返回 False"""
+        from unittest.mock import patch
+        from modules.forward import confirm_forward
+
+        with patch("builtins.input", return_value="n"):
+            result = confirm_forward([], {"total_count": 0})
+        assert result is False
+
+    def test_confirm_forward_empty_input(self):
+        """用户直接回车视为拒绝"""
+        from unittest.mock import patch
+        from modules.forward import confirm_forward
+
+        with patch("builtins.input", return_value=""):
+            result = confirm_forward([], {"total_count": 0})
+        assert result is False
+
+
 class TestFindHighReactionMessages:
     """测试 find_high_reaction_messages 函数"""
 
