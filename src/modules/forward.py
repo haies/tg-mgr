@@ -109,45 +109,53 @@ def resolve_username_to_channel_id(client: Client, username: str) -> int | None:
         return None
 
 
-def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int) -> list[dict[str, Any]]:
+def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int, reaction_limit: int = 10) -> list[dict[str, Any]]:
     """查找要转发的消息（高反应优先，否则用浏览量）
+
+    与 info.py 的统计逻辑保持一致：
+    - 优先：反应 > 50 的消息，如果数量 > 配置限制，全部返回
+    - 否则：获取反应 > 0 的消息，按配置限制数量返回
 
     Args:
         conn: 数据库连接
         channel_id: 频道ID
+        reaction_limit: 高反应消息数量限制
 
     Returns:
         消息列表，每条消息包含 message_id, source_id 等
     """
-    # 优先：反应 > 0 的消息
-    over0_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=50)
-    over0 = {row[0]: row for row in over0_results}
+    # 获取高反应消息（与info.py逻辑一致）
+    over50_results = find_reaction_messages_over_threshold(conn, threshold=50, limit=50)
+    over50_count = len(over50_results)
 
-    if len(over0) > 0:
-        # 如果 >0 的消息超过 10 条，全部转发
-        if len(over0) > 10:
-            results = []
-            for msg_id, row in sorted(over0.items(), key=lambda x: x[1][3], reverse=True):
-                results.append(row_to_reaction_dict((msg_id, row[1], row[2], row[3])))
-            return results
-        # 否则转发 top 10
+    if over50_count > reaction_limit:
+        # 大于50的数量超过限制，全部返回
         results = []
-        for row in query_high_reaction(conn, min_total=0, limit=10):
+        for row in over50_results:
             results.append(row_to_reaction_dict(row))
         return results
 
-    # Fallback：浏览量 >= 1 的 top 10（使用统一查询函数）
-    from database.query import find_messages_by_views
-    view_results = find_messages_by_views(conn, min_views=1, limit=10)
+    # 否则获取所有有反应的消息（threshold=0），按限制数量返回
+    all_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=reaction_limit)
     results = []
+    for row in all_results:
+        results.append(row_to_reaction_dict(row))
+
+    if results:
+        return results
+
+    # Fallback：浏览量 >= 1 的消息（使用统一查询函数）
+    from database.query import find_messages_by_views
+    view_results = find_messages_by_views(conn, min_views=1, limit=reaction_limit)
+    fallback_results = []
     for row in view_results:
-        results.append({
+        fallback_results.append({
             "message_id": row[0],
             "views": row[1],
             "source_id": row[2],
             "media_type": row[3],
         })
-    return results
+    return fallback_results
 
 
 def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:
@@ -707,6 +715,7 @@ def forward_with_recursion(
     processed_channels: set[int] | None = None,
     check_exists: bool = False,
     force: bool = False,
+    reaction_limit: int = 10,
 ) -> tuple[int, int, int]:
     """递归转发高反应消息
 
@@ -757,7 +766,7 @@ def forward_with_recursion(
         conn = get_db_connection()
 
         # 查找要转发的消息
-        messages = find_messages_to_forward(conn, channel_id)
+        messages = find_messages_to_forward(conn, channel_id, reaction_limit)
         if messages:
             total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
             total_views = sum(m.get("views", 0) for m in messages)
@@ -857,6 +866,8 @@ def main():
     )
     parser.add_argument("-f", "--force", action="store_true",
         help="强制转发禁止转发的消息（通过复制内容而非转发）")
+    parser.add_argument("-l", "--limit", type=int, default=10,
+        help=f"高反应消息数量限制（默认10）")
 
     args = parser.parse_args()
 
@@ -972,7 +983,7 @@ def main():
                     continue
 
                 conn = get_db_connection()
-                messages = find_messages_to_forward(conn, channel_id)
+                messages = find_messages_to_forward(conn, channel_id, reaction_limit)
                 if messages:
                     total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
                     total_views = sum(m.get("views", 0) for m in messages)
@@ -993,6 +1004,7 @@ def main():
                 max_depth=recursion_depth,
                 check_exists=args.check,
                 force=args.force,
+                reaction_limit=args.limit,
             )
             print("\n[FORWARD] ========== 全部完成 ==========")
             print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")
