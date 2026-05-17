@@ -1072,7 +1072,16 @@ def main():
                     continue
 
                 conn = get_db_connection()
-                messages = find_messages_to_forward(conn, channel_id, reaction_limit)
+                messages = find_messages_to_forward(conn, channel_id, args.limit)
+
+                # 使用 -f 时先统计后确认
+                if args.force and messages:
+                    summary = summarize_messages_for_forward(conn, messages)
+                    if not confirm_forward(messages, summary):
+                        print("[FORWARD] 已取消")
+                        conn.close()
+                        return
+
                 if messages:
                     total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
                     total_views = sum(m.get("views", 0) for m in messages)
