@@ -104,6 +104,7 @@ def _sync_impl(_channel_id: str) -> None:
                 _, _, batch_skipped = insert_messages(cursor, batch_messages, seen_files)
                 total_messages += len(batch_messages)
                 total_skipped += batch_skipped
+                conn.commit()  # 必须提交，否则数据回滚
                 print(f"[SYNC] 处理进度 - 总消息数: {total_messages}\r", end="", flush=True)
 
             # 统计各类消息数量
