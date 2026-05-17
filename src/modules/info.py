@@ -102,9 +102,18 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
             if source["name"] is None:
                 source["name"] = channel_cache.get(source["id"], "无名")
 
-        # 获取高反应消息（统一为 forward 逻辑）
-        reaction_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=reaction_limit)
-        reactions = [row_to_reaction_dict(row) for row in reaction_results]
+        # 获取高反应消息（与forward逻辑一致）
+        # 优先：反应 > 50 的消息
+        over50_results = find_reaction_messages_over_threshold(conn, threshold=50, limit=50)
+        over50_count = len(over50_results)
+
+        if over50_count > reaction_limit:
+            # 大于50的数量已超过限制，全部输出
+            reactions = [row_to_reaction_dict(row) for row in over50_results]
+        else:
+            # 否则使用 threshold=0 获取所有有反应的消息，取配置的限制数量
+            all_reaction_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=reaction_limit)
+            reactions = [row_to_reaction_dict(row) for row in all_reaction_results]
 
         # 获取高浏览量消息（views > 0）
         view_limit = reaction_limit  # 复用 reaction_limit 作为 views limit
