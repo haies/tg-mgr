@@ -3,7 +3,7 @@ from typing import Any
 
 from pyrogram import errors
 
-from database import get_db
+from database import get_db, get_database_path
 from database.query import (
     find_messages_by_views,
     find_reaction_messages_over_threshold,
@@ -122,6 +122,9 @@ def main():
     parser.add_argument(
         "channel_id", nargs="?", type=int, help="频道ID（可选，不填则列出所有频道）"
     )
+    parser.add_argument(
+        "-f", "--force", action="store_true", help="强制重置数据库并重新同步（获取所有历史消息）"
+    )
     parser.add_argument("reaction_limit", nargs="?", type=int, help="高反应消息数量限制（可选）")
 
     args = parser.parse_args()
@@ -132,6 +135,13 @@ def main():
             print(f"{dialog['name']}\t{dialog['id']}\t{dialog['address']}")
     else:
         # 指定频道ID模式
+        # 强制重置模式：删除数据库并重新同步
+        if args.force:
+            db_path = get_database_path()
+            if db_path.exists():
+                db_path.unlink()
+                print("[INFO] 已删除旧数据库，将重新同步所有消息...")
+
         result = analyze_channel(args.channel_id, reaction_limit=args.reaction_limit)
         print("\n转发来源TOP:")
         for item in result["forward_sources"]:
