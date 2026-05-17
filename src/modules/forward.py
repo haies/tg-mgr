@@ -53,6 +53,50 @@ DEFAULT_RECURSION_DEPTH = 5
 MAX_MEDIA_GROUP_SEARCH_OFFSET = 20
 
 
+def summarize_messages_for_forward(
+    conn: sqlite3.Connection,
+    messages: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """统计待转发消息的累计大小和条数
+
+    Returns:
+        {
+            "total_count": int,
+            "media_count": int,
+            "total_size_mb": float,
+        }
+    """
+    if not messages:
+        return {"total_count": 0, "media_count": 0, "total_size_mb": 0.0}
+
+    msg_ids = [m["message_id"] for m in messages]
+
+    cursor = conn.cursor()
+    placeholders = ",".join("?" * len(msg_ids))
+    cursor.execute(
+        f"""
+        SELECT
+            COUNT(*) as total_count,
+            SUM(CASE WHEN file_size > 0 THEN 1 ELSE 0 END) as media_count,
+            COALESCE(SUM(file_size), 0) as total_size
+        FROM messages
+        WHERE message_id IN ({placeholders})
+        """,
+        msg_ids,
+    )
+    row = cursor.fetchone()
+
+    total_count = row[0] if row else 0
+    media_count = row[1] if row else 0
+    total_size_bytes = row[2] if row else 0
+
+    return {
+        "total_count": total_count,
+        "media_count": media_count,
+        "total_size_mb": total_size_bytes / 1024 / 1024,
+    }
+
+
 def parse_source_arg(arg: str) -> tuple[int | None, int | None, str | None]:
     """解析参数为 (channel_id, message_id, username)
 

@@ -16,6 +16,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 
+class TestSummarizeMessagesForForward:
+    """测试 summarize_messages_for_forward 函数"""
+
+    def test_summarize_messages_for_forward_empty(self):
+        """空消息列表"""
+        import sqlite3
+        from modules.forward import summarize_messages_for_forward
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE messages (message_id INTEGER, file_size INTEGER)")
+        result = summarize_messages_for_forward(conn, [])
+        assert result["total_count"] == 0
+        assert result["media_count"] == 0
+        assert result["total_size_mb"] == 0.0
+        conn.close()
+
+    def test_summarize_messages_for_forward_with_media(self):
+        """有媒体的消息统计"""
+        import sqlite3
+        from modules.forward import summarize_messages_for_forward
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE messages (message_id INTEGER PRIMARY KEY, file_size INTEGER)")
+        conn.execute("INSERT INTO messages VALUES (1, 10485760), (2, 20971520), (3, 0)")  # 10MB, 20MB, 0
+        messages = [{"message_id": 1}, {"message_id": 2}, {"message_id": 3}]
+        result = summarize_messages_for_forward(conn, messages)
+        assert result["total_count"] == 3
+        assert result["media_count"] == 2
+        assert abs(result["total_size_mb"] - 30.0) < 0.01
+        conn.close()
+
+
 class TestFindHighReactionMessages:
     """测试 find_high_reaction_messages 函数"""
 
