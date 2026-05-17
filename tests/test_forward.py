@@ -262,3 +262,205 @@ class TestForceConfirmationNonRecursive:
             # 确认被调用但转发未被调用
             mock_confirm.assert_called_once()
             mock_forward.assert_not_called()
+
+
+class TestForceConfirmationRecursive:
+    """测试 -f 参数在递归模式下的确认逻辑"""
+
+    def test_confirm_called_before_recursion_when_force_used(self, populated_db):
+        """当 -f 用于递归模式时，确认在递归前被调用"""
+        from unittest.mock import patch, MagicMock
+        import sys
+        from pathlib import Path
+
+        from modules.forward import main as forward_main
+
+        with patch('modules.forward.get_client') as mock_get_client, \
+             patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
+             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+
+            mock_client = MagicMock()
+            mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+            mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_find.return_value = [
+                {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
+                {"message_id": 2, "positive": 20, "heart": 10, "views": 200},
+            ]
+            mock_summarize.return_value = {"total_count": 2, "media_count": 0, "total_size_mb": 0.0}
+            mock_confirm.return_value = True
+            mock_recursive.return_value = (1, 0, 0)
+
+            mock_conn = MagicMock()
+            mock_get_db.return_value = mock_conn
+
+            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f', '-r', '3']):
+                forward_main()
+
+            # 确认在递归前被调用
+            mock_confirm.assert_called_once()
+            # 递归函数应该被调用（因为确认通过）
+            mock_recursive.assert_called_once()
+
+    def test_confirm_not_called_when_force_not_used_recursive(self, populated_db):
+        """递归模式但没有 -f 时，确认不应被调用"""
+        from unittest.mock import patch, MagicMock
+        import sys
+        from pathlib import Path
+
+        from modules.forward import main as forward_main
+
+        with patch('modules.forward.get_client') as mock_get_client, \
+             patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
+             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+
+            mock_client = MagicMock()
+            mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+            mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_recursive.return_value = (1, 0, 0)
+
+            mock_conn = MagicMock()
+            mock_get_db.return_value = mock_conn
+
+            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-r', '3']):
+                forward_main()
+
+            # -f 未使用时，confirm_forward 不应被调用
+            mock_confirm.assert_not_called()
+            # 递归函数应该被调用
+            mock_recursive.assert_called_once()
+
+    def test_recursion_returns_early_when_confirm_rejected(self, populated_db):
+        """递归模式且用户拒绝确认时应提前返回"""
+        from unittest.mock import patch, MagicMock
+        import sys
+        from pathlib import Path
+
+        from modules.forward import main as forward_main
+
+        with patch('modules.forward.get_client') as mock_get_client, \
+             patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
+             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+
+            mock_client = MagicMock()
+            mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+            mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_find.return_value = [
+                {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
+            ]
+            mock_summarize.return_value = {"total_count": 1, "media_count": 0, "total_size_mb": 0.0}
+            mock_confirm.return_value = False  # 用户拒绝
+
+            mock_conn = MagicMock()
+            mock_get_db.return_value = mock_conn
+
+            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f', '-r', '3']):
+                forward_main()
+
+            # 确认被调用
+            mock_confirm.assert_called_once()
+            # 但递归函数不应被调用（因为确认未通过）
+            mock_recursive.assert_not_called()
+
+    def test_recursion_returns_early_when_no_messages(self, populated_db):
+        """递归模式且所有频道无消息时应提前返回"""
+        from unittest.mock import patch, MagicMock
+        import sys
+        from pathlib import Path
+
+        from modules.forward import main as forward_main
+
+        with patch('modules.forward.get_client') as mock_get_client, \
+             patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
+             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+
+            mock_client = MagicMock()
+            mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+            mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_find.return_value = []  # 无消息
+            mock_summarize.return_value = {"total_count": 0, "media_count": 0, "total_size_mb": 0.0}
+
+            mock_conn = MagicMock()
+            mock_get_db.return_value = mock_conn
+
+            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f', '-r', '3']):
+                forward_main()
+
+            # 确认不应被调用（因为没有消息）
+            mock_confirm.assert_not_called()
+            # 递归函数不应被调用
+            mock_recursive.assert_not_called()
+
+
+class TestForwardForceFlagConfirmation:
+    """测试 -f 参数触发的确认提示包含 MB 和条数信息"""
+
+    def test_forward_force_flag_shows_confirmation(self, populated_db, monkeypatch):
+        """-f 参数触发统计确认，提示应包含 MB 和条数信息"""
+        from unittest.mock import patch, MagicMock
+
+        from modules.forward import main as forward_main
+
+        captured = {}
+        def mock_input(prompt):
+            captured["prompt"] = prompt
+            return "y"
+        monkeypatch.setattr("builtins.input", mock_input)
+
+        with patch('modules.forward.get_client') as mock_get_client, \
+             patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
+             patch('modules.forward.sync_channel_for_forward'), \
+             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
+
+            mock_client = MagicMock()
+            mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+            mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_find.return_value = [
+                {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
+                {"message_id": 2, "positive": 20, "heart": 10, "views": 200},
+            ]
+            mock_summarize.return_value = {"total_count": 2, "media_count": 1, "total_size_mb": 15.0}
+            mock_forward.return_value = (2, 0, 0)
+
+            mock_conn = MagicMock()
+            mock_get_db.return_value = mock_conn
+
+            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f']):
+                forward_main()
+
+            # 确认 prompt 包含 MB 和条数信息
+            # MB 在 input prompt 中，条数信息在打印的统计中
+            prompt = captured.get("prompt", "")
+            assert "MB" in prompt, f"Expected 'MB' in prompt, got: {prompt}"
