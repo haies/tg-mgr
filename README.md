@@ -112,9 +112,10 @@ Features: Telegram Desktop format, media download, resume support, incremental e
 ### info - Channel Analysis
 
 ```bash
-tg info                     # List all channels
-tg info -1001234567890      # Analyze specific channel
-tg info -1001234567890 20   # Top 20 high-reaction messages
+tg info                          # List all channels
+tg info -1001234567890           # Analyze specific channel
+tg info -1001234567890 20        # Top 20 high-reaction messages
+tg info -1001234567890 -f        # Force reset database and re-sync
 ```
 
 **Analysis Output:**
