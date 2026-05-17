@@ -1093,7 +1093,35 @@ def main():
                     print(f"[FORWARD] 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")
                 conn.close()
         else:
-            # 递归转发
+            # 递归转发 - 使用 -f 时先统计后确认
+            if args.force:
+                all_messages = []
+                for ch_id in channel_ids:
+                    # 同步频道
+                    try:
+                        sync_channel_for_forward(ch_id)
+                    except Exception as e:
+                        print(f"[FORWARD] 同步频道 {ch_id} 失败: {e}")
+                        continue
+                    # 获取消息
+                    conn = get_db_connection()
+                    msgs = find_messages_to_forward(conn, ch_id, args.limit)
+                    if msgs:
+                        all_messages.extend(msgs)
+                    conn.close()
+
+                if all_messages:
+                    # 重新从数据库统计（获取 file_size）
+                    conn = get_db_connection()
+                    summary = summarize_messages_for_forward(conn, all_messages)
+                    conn.close()
+                    if not confirm_forward(all_messages, summary):
+                        print("[FORWARD] 已取消")
+                        return
+                else:
+                    print("[FORWARD] 所有频道无可转发消息")
+                    return
+
             print(f"[FORWARD] 处理 {len(channel_ids)} 个频道（递归深度 {recursion_depth}）...")
             total_f, total_s, total_fa = forward_with_recursion(
                 channel_ids,
