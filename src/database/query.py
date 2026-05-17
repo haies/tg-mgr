@@ -11,13 +11,14 @@
 import sqlite3
 
 # 共享的 CTE 查询片段，用于从 reactions JSON 中提取数据
+# total 优先从 JSON 读取，兼容旧数据（无 total 字段时回退到 positive + heart）
 _REACTION_CTE = """
 WITH reaction_messages AS (
     SELECT
         message_id,
         json_extract(reactions, '$.positive') AS positive,
         json_extract(reactions, '$.heart') AS heart,
-        (json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
+        COALESCE(json_extract(reactions, '$.total'), json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
     FROM messages
     WHERE is_valid = 1 AND reactions IS NOT NULL
 )

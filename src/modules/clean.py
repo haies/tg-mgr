@@ -174,7 +174,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
                     caption,
                     0,
                     is_valid,
-                    json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
+                    json.dumps({"positive": reaction.positive, "heart": reaction.heart, "total": reaction.total}),
                     source_id,
                     media_group_id,
                     media_info.views,

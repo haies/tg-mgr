@@ -100,7 +100,7 @@ def insert_messages(
                     caption,
                     0,
                     is_valid,
-                    json.dumps({"positive": reaction.positive, "heart": reaction.heart}),
+                    json.dumps({"positive": reaction.positive, "heart": reaction.heart, "total": reaction.total}),
                     source_id,
                     media_info.views,
                 )
