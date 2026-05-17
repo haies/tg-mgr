@@ -30,6 +30,8 @@ import time
 from pyrogram import Client, errors, types
 
 from database import get_database_path, get_db, get_schema_path
+from database.messages import get_last_processed_id
+from modules.sync import force_reset_database
 from utils.media import extract_media_info, extract_reaction_data, extract_source_id
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import generate_tg_link
@@ -117,12 +119,6 @@ def check_restricted(message: types.Message) -> str:
     return ""
 
 
-def get_last_processed_id(conn: sqlite3.Connection) -> int:
-    """获取最后处理的消息ID，用于断点续同步"""
-    cursor = conn.cursor()
-    cursor.execute("SELECT MAX(message_id) FROM messages")
-    result = cursor.fetchone()
-    return result[0] or 0
 
 
 def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen_files: set) -> int:
@@ -813,9 +809,7 @@ def main():
 
         # 只有在同步或强制重置时才清空数据库
         if should_sync or args.f:
-            db_path = get_database_path()
-            if db_path.exists():
-                db_path.unlink()
+            force_reset_database()
             run_sync(channel_id=channel)
 
         # 执行各项清理操作

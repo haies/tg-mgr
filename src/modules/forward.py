@@ -136,19 +136,11 @@ def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int) -> list[
             results.append(row_to_reaction_dict(row))
         return results
 
-    # Fallback：浏览量 > 0 的 top 10
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT message_id, views, source_id, media_type
-        FROM messages
-        WHERE is_valid = 1 AND views > 0
-        ORDER BY views DESC
-        LIMIT 10
-    """,
-    )
+    # Fallback：浏览量 >= 1 的 top 10（使用统一查询函数）
+    from database.query import find_messages_by_views
+    view_results = find_messages_by_views(conn, min_views=1, limit=10)
     results = []
-    for row in cursor.fetchall():
+    for row in view_results:
         results.append({
             "message_id": row[0],
             "views": row[1],

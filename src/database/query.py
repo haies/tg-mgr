@@ -71,8 +71,8 @@ def find_reaction_messages_over_threshold(
     """
     cursor = conn.cursor()
 
-    # threshold=0 转为 threshold=1，确保 total > 0
-    effective_threshold = max(1, threshold)
+    # threshold=0 返回 total > 0（包含1个reaction的消息）
+    effective_threshold = threshold
 
     if limit is not None:
         cursor.execute(

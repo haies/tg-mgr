@@ -40,7 +40,7 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
         reaction_limit if reaction_limit is not None else config.get("reaction_limit", 10)
     )
 
-    from modules.sync import sync_channel
+    from modules.sync import sync_channel, force_reset_database
 
     sync_channel(channel_id=str(channel_id))
 
@@ -137,10 +137,7 @@ def main():
         # 指定频道ID模式
         # 强制重置模式：删除数据库并重新同步
         if args.force:
-            db_path = get_database_path()
-            if db_path.exists():
-                db_path.unlink()
-                print("[INFO] 已删除旧数据库，将重新同步所有消息...")
+            force_reset_database()
 
         result = analyze_channel(args.channel_id, reaction_limit=args.reaction_limit)
         print("\n转发来源TOP:")

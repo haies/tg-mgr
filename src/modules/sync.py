@@ -20,6 +20,14 @@ from database.messages import (
 from utils.telegram_client import get_client, get_config
 
 
+def force_reset_database() -> None:
+    """统一的重置数据库逻辑（删除旧数据库）"""
+    db_path = get_database_path()
+    if db_path.exists():
+        db_path.unlink()
+        print("[INFO] 已删除旧数据库...")
+
+
 def sync_channel(channel_id: str | None = None, db_path: str | None = None) -> None:
     """同步频道消息到数据库
 
