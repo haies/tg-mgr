@@ -11,11 +11,49 @@ Telegram 客户端工具模块
 """
 
 import json
+import logging
 import os
 import sys
 import time
 from functools import wraps
 from pathlib import Path
+
+# 配置根 logger 的 FloodWait filter，在 dotenv 加载前完成
+# 这样 Pyrogram 产生的日志也会被过滤
+_logger = logging.getLogger(__name__)
+
+
+class _FloodWaitFilter(logging.Filter):
+    FLOOD_WAIT_PATTERN = __import__("re").compile(r"Waiting for \d+ seconds before continuing")
+
+    def filter(self, record):
+        if record.levelno == logging.WARNING:
+            msg = record.getMessage()
+            if self.FLOOD_WAIT_PATTERN.search(msg):
+                return False
+        return True
+
+
+def _setup_floodwait_filter():
+    root = logging.getLogger()
+    # 检查是否已有 filter
+    for handler in root.handlers:
+        for f in handler.filters:
+            if isinstance(f, _FloodWaitFilter):
+                return
+    # 添加 filter 到现有 handlers
+    for handler in root.handlers:
+        handler.addFilter(_FloodWaitFilter())
+    # 如果还没有 handlers（此时 pyrogram 还未导入），创建一个带 filter 的 handler
+    # 防止 Python 自动添加默认的无过滤 StreamHandler
+    if not root.handlers:
+        h = logging.StreamHandler(sys.stdout)
+        h.setLevel(logging.WARNING)
+        h.addFilter(_FloodWaitFilter())
+        root.addHandler(h)
+
+
+_setup_floodwait_filter()
 
 from dotenv import load_dotenv
 
