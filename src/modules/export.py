@@ -372,7 +372,7 @@ def download_media_from_message(
             file_name=str(save_path),
         )
 
-        if downloaded_path and Path(downloaded_path).exists():
+        if downloaded_path and Path(downloaded_path).exists():  # type: ignore[arg-type]
             rel_path = f"{media_type}/{filename}"
             state.mark_file_downloaded(file_unique_id, rel_path)
             print(f"  [SUCCESS] 下载完成: {rel_path}")
@@ -529,7 +529,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
     # 创建 Telegram 客户端（使用统一的客户端工具）
     client, is_started = create_client(config, session_name="tg-mgr")
     if not is_started:
-        client.start()
+        client.start()  # type: ignore[unused-coroutine]
 
     try:
         # 获取频道信息
@@ -537,10 +537,10 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
         try:
             chat = client.get_chat(_channel_id)
             channel_info = {
-                "id": chat.id,
-                "title": chat.title or "Unknown Channel",
-                "username": chat.username,
-                "type": chat.type.value if hasattr(chat.type, "value") else str(chat.type),
+                "id": chat.id,  # type: ignore[attr-defined]
+                "title": chat.title or "Unknown Channel",  # type: ignore[attr-defined]
+                "username": chat.username,  # type: ignore[attr-defined]
+                "type": chat.type.value if hasattr(chat.type, "value") else str(chat.type),  # type: ignore[attr-defined]
             }
         except errors.PeerIdInvalid as e:
             print(f"[ERROR] 无法访问该频道: {e}")
@@ -595,7 +595,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
                 batch_messages = []
 
                 # 获取一批消息
-                for message in client.get_chat_history(
+                for message in client.get_chat_history(  # type: ignore[union-attr]
                     _channel_id, offset_id=offset_id, limit=batch_size
                 ):
                     batch_messages.append(message)
@@ -722,7 +722,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
     finally:
         # 确保客户端正确关闭
         if "client" in locals():
-            client.stop()
+            client.stop()  # type: ignore[unused-coroutine]
             print("[EXPORT] 客户端已断开连接")
 
 

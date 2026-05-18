@@ -57,7 +57,7 @@ def delete_message_safely(
 
     while retry_count < max_retries:
         try:
-            client.delete_messages(channel_id, message_id)
+            client.delete_messages(channel_id, message_id)  # type: ignore[unused-coroutine]
             print(f"    [CLEAN] 已从Telegram删除消息 #{message_id}")
 
             # 更新数据库中的 is_duplicate 标志
@@ -65,7 +65,7 @@ def delete_message_safely(
             cursor.execute("UPDATE messages SET is_duplicate = 1 WHERE message_id = ?", (message_id,))
             return True
         except errors.FloodWait as e:
-            wait_time = max(e.value, 5)
+            wait_time = float(max(e.value, 5))
             print(f"    [WARNING] FloodWait: 等待 {wait_time} 秒后重试...")
             time.sleep(wait_time)
             retry_count += 1
@@ -208,7 +208,7 @@ def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict
         client = None
         if delete:
             client = get_client("tg-mgr")
-            client.start()
+            client.start()  # type: ignore[unused-coroutine]
 
         try:
             for i, (file_size, media_type, keep_id, delete_ids) in enumerate(duplicates, 1):
@@ -222,6 +222,7 @@ def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict
                     print(f"  - {status}: {generate_tg_link(_channel_id, msg_id)}")
 
                     if delete:
+                        assert client is not None
                         success = delete_message_safely(client, conn, msg_id, _channel_id)
                         if success:
                             total_deleted += 1
@@ -238,7 +239,7 @@ def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict
 
         finally:
             if client and client.is_connected:
-                client.stop()
+                client.stop()  # type: ignore[unused-coroutine]
 
         return stats
 
@@ -289,7 +290,7 @@ def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> dict[s
         client = None
         if delete:
             client = get_client("tg-mgr")
-            client.start()
+            client.start()  # type: ignore[unused-coroutine]
 
         try:
             for idx, msg in enumerate(invalid_messages, 1):
@@ -301,6 +302,7 @@ def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> dict[s
                 print(f"  - 时间: {timestamp}")
 
                 if delete:
+                    assert client is not None
                     success = delete_message_safely(client, conn, msg_id, _channel_id)
                     if success:
                         total_deleted += 1
@@ -317,7 +319,7 @@ def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> dict[s
 
         finally:
             if client and client.is_connected:
-                client.stop()
+                client.stop()  # type: ignore[unused-coroutine]
 
         return stats
 
@@ -356,7 +358,7 @@ def run_dejunk(delete: bool = False, channel_id: str | None = None) -> dict[str,
         client = None
         if delete:
             client = get_client("tg-mgr")
-            client.start()
+            client.start()  # type: ignore[unused-coroutine]
 
         try:
             for idx, msg in enumerate(junk_messages, 1):
@@ -368,6 +370,7 @@ def run_dejunk(delete: bool = False, channel_id: str | None = None) -> dict[str,
                 print(f"  [{idx}] {tg_link} | {media_type} {size_kb}KB | 文字 {text_len} 字")
 
                 if delete:
+                    assert client is not None
                     success = delete_message_safely(client, conn, msg_id, _channel_id)
                     if success:
                         total_deleted += 1
@@ -382,7 +385,7 @@ def run_dejunk(delete: bool = False, channel_id: str | None = None) -> dict[str,
 
         finally:
             if client and client.is_connected:
-                client.stop()
+                client.stop()  # type: ignore[unused-coroutine]
 
         return stats
 

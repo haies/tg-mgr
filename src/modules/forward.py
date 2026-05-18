@@ -194,8 +194,8 @@ def resolve_username_to_channel_id(client: Client, username: str) -> int | None:
         # 确保 username 有 @ 前缀
         if not username.startswith('@'):
             username = f"@{username}"
-        chat = client.get_chat(username)
-        return chat.id
+        chat = client.get_chat(username)  # type: ignore[attr-defined]
+        return chat.id  # type: ignore[attr-defined]
     except Exception as e:
         print(f"[ERROR] 无法解析用户名 {username}: {e}")
         return None
@@ -331,7 +331,7 @@ def forward_single_message(
             return _forward_media_group(client, source_channel_id, target_channel_id, media_group_messages, force=force)
         else:
             # 普通消息：直接复制
-            client.copy_message(
+            client.copy_message(  # type: ignore[unused-coroutine]
                 chat_id=target_channel_id,
                 from_chat_id=source_channel_id,
                 message_id=message_id,
@@ -354,9 +354,9 @@ def _get_original_media_group_message(
     """获取消息所在的媒体组原消息"""
     try:
         # 先调用 get_chat 建立会话，解决 CHAT_ID_INVALID 问题
-        client.get_chat(channel_id)
-        msgs = client.get_messages(channel_id, message_id)
-        return msgs
+        client.get_chat(channel_id)  # type: ignore[unused-coroutine]
+        msgs = client.get_messages(channel_id, message_id)  # type: ignore[union-attr]
+        return msgs  # type: ignore[return-value]
     except Exception:
         return None
 
@@ -377,7 +377,7 @@ def _get_media_group_messages(
     """
     try:
         # 先调用 get_chat 建立会话
-        client.get_chat(channel_id)
+        client.get_chat(channel_id)  # type: ignore[unused-coroutine]
 
         messages = []
         seen_ids = set()
@@ -385,10 +385,10 @@ def _get_media_group_messages(
         # 如果有 center_msg_id，先获取它作为起点
         if center_msg_id:
             try:
-                center_msg = client.get_messages(channel_id, center_msg_id)
-                if center_msg and str(center_msg.media_group_id) == str(media_group_id):
+                center_msg = client.get_messages(channel_id, center_msg_id)  # type: ignore[union-attr]
+                if center_msg and str(center_msg.media_group_id) == str(media_group_id):  # type: ignore[attr-defined]
                     messages.append(center_msg)
-                    seen_ids.add(center_msg.id)
+                    seen_ids.add(center_msg.id)  # type: ignore[attr-defined]
             except Exception:
                 pass
 
@@ -400,10 +400,10 @@ def _get_media_group_messages(
             # 向后搜索：offset_id=center_msg_id 返回 <= center_msg_id 的消息
             # 由于历史消息是 id 越低越旧，我们需要找 id < center_msg_id 的
             found_any = False
-            for msg in client.get_chat_history(channel_id, limit=200, offset_id=center_msg_id):
-                if msg.media_group_id == media_group_id and msg.id not in seen_ids:
+            for msg in client.get_chat_history(channel_id, limit=200, offset_id=center_msg_id):  # type: ignore[union-attr]
+                if msg.media_group_id == media_group_id and msg.id not in seen_ids:  # type: ignore[attr-defined]
                     messages.append(msg)
-                    seen_ids.add(msg.id)
+                    seen_ids.add(msg.id)  # type: ignore[attr-defined]
                     found_any = True
                     if len(messages) >= 10:
                         break
@@ -413,10 +413,10 @@ def _get_media_group_messages(
 
             # 向前搜索：offset_id=0 返回最新消息，需要过滤 id > center_msg_id 的
             found_any = False
-            for msg in client.get_chat_history(channel_id, limit=200, offset_id=0):
-                if msg.id > center_msg_id and msg.media_group_id == media_group_id and msg.id not in seen_ids:
+            for msg in client.get_chat_history(channel_id, limit=200, offset_id=0):  # type: ignore[union-attr]
+                if msg.id > center_msg_id and msg.media_group_id == media_group_id and msg.id not in seen_ids:  # type: ignore[attr-defined]
                     messages.append(msg)
-                    seen_ids.add(msg.id)
+                    seen_ids.add(msg.id)  # type: ignore[attr-defined]
                     found_any = True
                     if len(messages) >= 10:
                         break
@@ -425,16 +425,16 @@ def _get_media_group_messages(
                     break
         else:
             # 没有 center_msg_id，使用批量获取（可能不准）
-            for msg in client.get_chat_history(channel_id, limit=200):
-                if msg.media_group_id == media_group_id and msg.id not in seen_ids:
+            for msg in client.get_chat_history(channel_id, limit=200):  # type: ignore[union-attr]
+                if msg.media_group_id == media_group_id and msg.id not in seen_ids:  # type: ignore[attr-defined]
                     messages.append(msg)
-                    seen_ids.add(msg.id)
+                    seen_ids.add(msg.id)  # type: ignore[attr-defined]
                     if len(messages) >= 10:
                         break
 
         # 按 message_id 排序
-        messages.sort(key=lambda m: m.id)
-        return messages
+        messages.sort(key=lambda m: m.id)  # type: ignore[attr-defined]
+        return messages  # type: ignore[return-value]
     except Exception:
         return []
 
@@ -475,7 +475,7 @@ def _forward_media_group(
         return False
 
     try:
-        client.send_media_group(target_channel_id, media_list)
+        client.send_media_group(target_channel_id, media_list)  # type: ignore[unused-coroutine, arg-type]
         return True
     except errors.FloodWait as e:
         wait = max(e.value, 5)
@@ -580,13 +580,13 @@ def _download_with_resume(client: Client, message: Message, target_path: str, ma
             )
 
             # 验证下载完整性
-            if result_path and os.path.exists(result_path):
-                final_size = os.path.getsize(result_path)
+            if result_path and os.path.exists(result_path):  # type: ignore[arg-type, union-attr]
+                final_size = os.path.getsize(result_path)  # type: ignore[arg-type, union-attr]
                 if file_size > 0 and final_size > 0 and final_size < file_size * 0.95:  # 允许5%误差
                     print(f"[DOWNLOAD] 下载不完整: {final_size} / {file_size} bytes，重试...")
                     continue
                 print(f"[DOWNLOAD] 下载完成: {final_size / 1024 / 1024:.1f} MB")
-                return result_path
+                return result_path  # type: ignore[return-value]
 
         except Exception as e:
             print(f"[DOWNLOAD] 下载失败 (尝试 {attempt + 1}/{max_retries}): {e}")
@@ -652,21 +652,21 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
         for attempt in range(3):
             try:
                 if message.photo:
-                    client.send_photo(chat_id=target_channel_id, photo=downloaded_path, caption=caption)
+                    client.send_photo(chat_id=target_channel_id, photo=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
                 elif message.video:
-                    client.send_video(chat_id=target_channel_id, video=downloaded_path, caption=caption)
+                    client.send_video(chat_id=target_channel_id, video=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
                 elif message.document:
-                    client.send_document(chat_id=target_channel_id, document=downloaded_path, caption=caption)
+                    client.send_document(chat_id=target_channel_id, document=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
                 elif message.animation:
-                    client.send_animation(chat_id=target_channel_id, animation=downloaded_path, caption=caption)
+                    client.send_animation(chat_id=target_channel_id, animation=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
                 elif message.audio:
-                    client.send_audio(chat_id=target_channel_id, audio=downloaded_path, caption=caption)
+                    client.send_audio(chat_id=target_channel_id, audio=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
                 elif message.voice:
-                    client.send_voice(chat_id=target_channel_id, voice=downloaded_path, caption=caption)
+                    client.send_voice(chat_id=target_channel_id, voice=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
                 elif message.video_note:
-                    client.send_video_note(chat_id=target_channel_id, video_note=downloaded_path)
+                    client.send_video_note(chat_id=target_channel_id, video_note=downloaded_path)  # type: ignore[unused-coroutine]
                 elif message.text:
-                    client.send_message(chat_id=target_channel_id, text=message.text)
+                    client.send_message(chat_id=target_channel_id, text=message.text)  # type: ignore[unused-coroutine]
                 else:
                     return False
 
@@ -707,7 +707,7 @@ def _force_send_media_group(
         if not media_list:
             return False
 
-        client.send_media_group(target_channel_id, media_list)
+        client.send_media_group(target_channel_id, media_list)  # type: ignore[unused-coroutine, arg-type]
         return True
     except Exception as e:
         logger.debug(f"强制发送媒体组失败: {e}")
@@ -964,7 +964,7 @@ def forward_with_recursion(
 def message_exists_in_channel(client: Client, target_channel_id: int, source_msg_id: int) -> bool:
     """检查消息是否已存在于目标频道"""
     try:
-        for msg in client.get_chat_history(target_channel_id, limit=100):
+        for msg in client.get_chat_history(target_channel_id, limit=100):  # type: ignore[union-attr]
             if msg.id == source_msg_id:
                 return True
         return False
@@ -975,7 +975,7 @@ def message_exists_in_channel(client: Client, target_channel_id: int, source_msg
 def join_channel(client: Client, channel_id: int) -> bool:
     """尝试加入频道"""
     try:
-        client.join_chat(channel_id)
+        client.join_chat(channel_id)  # type: ignore[unused-coroutine]
         return True
     except Exception:
         pass
@@ -983,7 +983,7 @@ def join_channel(client: Client, channel_id: int) -> bool:
     try:
         chat = client.get_chat(channel_id)
         if hasattr(chat, "username") and chat.username:
-            client.join_chat(f"https://t.me/{chat.username}")
+            client.join_chat(f"https://t.me/{chat.username}")  # type: ignore[unused-coroutine]
             return True
     except Exception:
         pass

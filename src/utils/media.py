@@ -124,12 +124,13 @@ def extract_reaction_data(message: types.Message) -> ReactionData:
     total_count = 0
 
     if hasattr(message, "reactions") and message.reactions:
-        for reaction in message.reactions.reactions:
-            total_count += reaction.count
-            if reaction.emoji == "👍":
-                positive_count += reaction.count
-            elif reaction.emoji in ["❤️", "❤"]:
-                heart_count += reaction.count
+        for reaction in message.reactions:  # type: ignore[union-attr]
+            count = reaction.count or 0
+            total_count += count
+            if reaction.emoji == "👍":  # type: ignore[attr-defined]
+                positive_count += count
+            elif reaction.emoji in ["❤️", "❤"]:  # type: ignore[attr-defined]
+                heart_count += count
 
     return ReactionData(
         positive=positive_count, heart=heart_count, total=total_count
