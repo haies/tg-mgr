@@ -40,6 +40,7 @@ def test_db():
             is_valid INTEGER DEFAULT 1,
             reactions TEXT,
             source_id INTEGER,
+            views INTEGER DEFAULT 0,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')

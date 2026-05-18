@@ -36,6 +36,7 @@ from pyrogram.types import (
 from database import get_database_path, get_db_connection
 from database.query import (
     find_reaction_messages_for_display,
+    get_forward_sources,
 )
 from utils.telegram_client import get_client, get_config, get_log_path
 from utils.telegram_link import get_channel_address
@@ -148,22 +149,28 @@ def parse_source_arg(arg: str) -> tuple[int | None, int | None, str | None]:
         (channel_id, message_id, username) - message_id 为 None 表示整个频道
         username 用于延迟解析（如 jn2678 -> -1001234567890）
     """
-    # 解析链接：https://t.me/c/1234567890/12345 或 https://t.me/username/123?single
+    # 标准化：补全缺失的 https:// 前缀
+    if arg.startswith("t.me/") and not arg.startswith("https://"):
+        arg = "https://" + arg
+
+    # 解析链接：https://t.me/c/1234567890/12345 格式（超级群/私有频道）
+    c_pattern = r"https?://t\.me/c/(\d+)/(\d+)(?:\?.*)?$"
+    c_match = re.match(c_pattern, arg)
+    if c_match:
+        raw_id = int(c_match.group(1))
+        message_id = int(c_match.group(2))
+        # t.me/c/xxxx/ 中的 xxxx 是超级群 ID，需要加 -100 前缀
+        channel_id = -(raw_id + 1000000000000) if raw_id < 100000000000 else -raw_id
+        return (channel_id, message_id, None)
+
+    # 解析链接：https://t.me/username/123 格式
     link_pattern = r"https?://t\.me/([\w_]+)/(\d+)(?:\?.*)?$"
     match = re.match(link_pattern, arg)
     if match:
         identifier = match.group(1)
         message_id = int(match.group(2))
-
-        # 检查是否是数字 ID（私有频道格式 t.me/c/数字/数字）
-        if identifier.isdigit():
-            raw_id = int(identifier)
-            # t.me/c/xxxx/ 中的 xxxx 是超级群 ID，需要加 -100 前缀
-            channel_id = -(raw_id + 1000000000000) if raw_id < 100000000000 else -raw_id
-            return (channel_id, message_id, None)
-        else:
-            # 用户名格式，需要延迟解析（调用 API）
-            return (None, message_id, identifier)
+        # 用户名格式，需要延迟解析（调用 API）
+        return (None, message_id, identifier)
 
     # 纯数字频道ID
     try:
@@ -194,20 +201,68 @@ def resolve_username_to_channel_id(client: Client, username: str) -> int | None:
         return None
 
 
-def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int, reaction_limit: int = 10) -> list[dict[str, Any]]:
-    """查找要转发的消息（高反应优先，否则用浏览量）
+def find_messages_to_forward(
+    conn: sqlite3.Connection,
+    channel_id: int,
+    reaction_limit: int = 10,
+    filter_by_source: bool = False,
+) -> list[dict[str, Any]]:
+    """查找要转发的消息（高反应 + 高浏览量 TOP，与 info 保持一致）
 
-    使用统一的 find_reaction_messages_for_display 逻辑。
+    查询逻辑与 info.py 的 analyze_channel 保持一致：
+    1. 高反应消息 TOP（使用 find_reaction_messages_for_display）
+    2. 高浏览量消息 TOP（views > 8x avg，使用 find_messages_by_views_top）
 
     Args:
         conn: 数据库连接
-        channel_id: 频道ID（作为 source_id 过滤条件）
-        reaction_limit: 高反应消息数量限制
+        channel_id: 频道ID（仅当 filter_by_source=True 时作为 source_id 过滤条件）
+        reaction_limit: 高反应/高浏览量消息数量限制
+        filter_by_source: 是否按 source_id 过滤（第1层为False，递归层为True）
 
     Returns:
         消息列表，每条消息包含 message_id, positive, heart, total, views, source_id, media_type
     """
-    return find_reaction_messages_for_display(conn, reaction_limit=reaction_limit, source_id=channel_id)
+    from database.query import find_messages_by_views_top
+
+    # source_id 过滤：仅递归层启用（第1层查所有消息）
+    source_id_for_query = channel_id if filter_by_source else None
+
+    # 1. 高反应消息
+    reaction_results = find_reaction_messages_for_display(
+        conn, reaction_limit=reaction_limit, source_id=source_id_for_query
+    )
+
+    # 2. 高浏览量消息（views > 8x avg）
+    view_rows = find_messages_by_views_top(conn, limit=reaction_limit, source_id=source_id_for_query)
+    view_results = [
+        {
+            "message_id": row[0],
+            "views": row[1],
+            "source_id": row[2],
+            "media_type": row[3],
+        }
+        for row in view_rows
+    ]
+
+    # 合并两类消息（按 message_id 去重，reaction 优先）
+    # 注意：reaction 结果可能缺少 views 字段，需要从 view 结果补充
+    seen_ids = set()
+    merged = []
+    for msg in reaction_results:
+        seen_ids.add(msg["message_id"])
+        merged.append(msg)
+    for msg in view_results:
+        if msg["message_id"] not in seen_ids:
+            seen_ids.add(msg["message_id"])
+            merged.append(msg)
+
+    # 补充 reaction 消息的 views 字段（从 view_results 中获取）
+    view_map = {row[0]: row[1] for row in view_rows}
+    for msg in merged:
+        if msg.get("total", 0) > 0 and "views" not in msg:
+            msg["views"] = view_map.get(msg["message_id"], 0)
+
+    return merged
 
 
 def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:
@@ -309,7 +364,7 @@ def _get_original_media_group_message(
 def _get_media_group_messages(
     client: Client, channel_id: int, media_group_id: str, center_msg_id: int | None = None
 ) -> list[Message]:
-    """获取媒体组的所有消息（批量获取优化版）
+    """获取媒体组的所有消息（双向搜索优化版）
 
     Args:
         client: Telegram 客户端
@@ -331,23 +386,51 @@ def _get_media_group_messages(
         if center_msg_id:
             try:
                 center_msg = client.get_messages(channel_id, center_msg_id)
-                if center_msg and center_msg.media_group_id == media_group_id:
+                if center_msg and str(center_msg.media_group_id) == str(media_group_id):
                     messages.append(center_msg)
                     seen_ids.add(center_msg.id)
             except Exception:
                 pass
 
-        # 使用 get_chat_history 批量获取消息（代替逐 offset 调用 get_messages）
-        # 获取足够的消息以覆盖媒体组
-        for msg in client.get_chat_history(channel_id, limit=200):
-            if msg.media_group_id == media_group_id and msg.id not in seen_ids:
-                messages.append(msg)
-                seen_ids.add(msg.id)
-                if len(messages) >= 10:
+        # 双向搜索：
+        # - 向后搜索（offset_id=center_msg_id）：获取 id < center_msg_id 的消息
+        # - 向前搜索（offset_id=0）：获取 id > center_msg_id 的消息
+
+        if center_msg_id:
+            # 向后搜索：offset_id=center_msg_id 返回 <= center_msg_id 的消息
+            # 由于历史消息是 id 越低越旧，我们需要找 id < center_msg_id 的
+            found_any = False
+            for msg in client.get_chat_history(channel_id, limit=200, offset_id=center_msg_id):
+                if msg.media_group_id == media_group_id and msg.id not in seen_ids:
+                    messages.append(msg)
+                    seen_ids.add(msg.id)
+                    found_any = True
+                    if len(messages) >= 10:
+                        break
+                elif found_any and msg.media_group_id != media_group_id:
+                    # 只有在找到过消息且遇到不同媒体组时才停止
                     break
-            elif seen_ids and (msg.media_group_id != media_group_id or msg.media_group_id is None):
-                # 遇到非媒体组消息且已有收集到消息，停止
-                break
+
+            # 向前搜索：offset_id=0 返回最新消息，需要过滤 id > center_msg_id 的
+            found_any = False
+            for msg in client.get_chat_history(channel_id, limit=200, offset_id=0):
+                if msg.id > center_msg_id and msg.media_group_id == media_group_id and msg.id not in seen_ids:
+                    messages.append(msg)
+                    seen_ids.add(msg.id)
+                    found_any = True
+                    if len(messages) >= 10:
+                        break
+                elif found_any and msg.id > center_msg_id and msg.media_group_id != media_group_id:
+                    # 只有在找到过消息且 id 已经在增长时，遇到不同媒体组才停止
+                    break
+        else:
+            # 没有 center_msg_id，使用批量获取（可能不准）
+            for msg in client.get_chat_history(channel_id, limit=200):
+                if msg.media_group_id == media_group_id and msg.id not in seen_ids:
+                    messages.append(msg)
+                    seen_ids.add(msg.id)
+                    if len(messages) >= 10:
+                        break
 
         # 按 message_id 排序
         messages.sort(key=lambda m: m.id)
@@ -606,6 +689,31 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
         return False
 
 
+def _force_send_media_group(
+    client: Client, target_channel_id: int, messages: list[Message]
+) -> bool:
+    """强制发送媒体组（下载后重新上传，保持媒体组结构）"""
+    try:
+        # 按 message_id 排序确保顺序正确
+        messages = sorted(messages, key=lambda m: m.id)
+
+        # 准备媒体组输入
+        media_list = []
+        for msg in messages:
+            media_input = _prepare_media_for_send(msg)
+            if media_input:
+                media_list.append(media_input)
+
+        if not media_list:
+            return False
+
+        client.send_media_group(target_channel_id, media_list)
+        return True
+    except Exception as e:
+        logger.debug(f"强制发送媒体组失败: {e}")
+        return False
+
+
 def forward_messages_batch(
     source_channel_id: int,
     target_channel_ids: list[int],
@@ -703,9 +811,31 @@ def forward_messages_batch(
                         break
                     if "CHAT_FORWARDS_RESTRICTED" in str(e):
                         if force:
-                            print(f"[FORWARD] 频道 {target_id} 禁止转发（force模式，跳过）")
-                            skipped += 1
-                            continue
+                            # force 模式：下载后重新上传（保持媒体组结构）
+                            try:
+                                if original_msg and original_msg.media_group_id:
+                                    media_group_msgs = _get_media_group_messages(
+                                        client, source_channel_id, original_msg.media_group_id, msg_id
+                                    )
+                                    if media_group_msgs and _force_send_media_group(client, target_id, media_group_msgs):
+                                        forwarded += 1
+                                        print(f"[FORWARD] 强制转发成功(媒体组): {link}")
+                                        continue
+                                    else:
+                                        failed += 1
+                                        continue
+                                else:
+                                    # 非媒体组消息，使用单条强制转发
+                                    if forward_single_message(client, source_channel_id, target_id, msg_id):
+                                        forwarded += 1
+                                        print(f"[FORWARD] 强制转发成功: {link}")
+                                        continue
+                                    else:
+                                        failed += 1
+                                        continue
+                            except Exception:
+                                failed += 1
+                                continue
                         print(f"[FORWARD] 频道 {target_id} 禁止转发内容")
                         break
                     print(f"[FORWARD] 转发失败: {link} - {e}")
@@ -786,8 +916,9 @@ def forward_with_recursion(
 
         conn = get_db_connection()
 
-        # 查找要转发的消息
-        messages = find_messages_to_forward(conn, channel_id, reaction_limit)
+        # 查找要转发的消息（第1层不按source_id过滤，与info一致；递归层按source_id过滤）
+        filter_by_source = current_depth > 1
+        messages = find_messages_to_forward(conn, channel_id, reaction_limit, filter_by_source=filter_by_source)
         if messages:
             total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
             total_views = sum(m.get("views", 0) for m in messages)
@@ -802,19 +933,21 @@ def forward_with_recursion(
             total_skipped += s
             total_failed += fa
 
-            # 递归处理下一层
+            # 递归处理下一层（使用 info 的转发来源TOP逻辑）
             if current_depth < max_depth:
-                next_channels = extract_source_channels(messages)
+                next_channels = get_forward_sources(conn, limit=reaction_limit)
                 if next_channels:
-                    print(f"[FORWARD] 深度 {current_depth}: 发现来源频道 {len(next_channels)} 个")
+                    source_channel_ids = [ch[0] for ch in next_channels]
+                    print(f"[FORWARD] 深度 {current_depth}: 发现来源频道 {len(source_channel_ids)} 个")
                     nf, ns, nfa = forward_with_recursion(
-                        next_channels,
+                        source_channel_ids,
                         target_channel,
                         current_depth + 1,
                         max_depth,
                         processed_channels,
                         check_exists,
                         force,
+                        reaction_limit,
                     )
                     total_forwarded += nf
                     total_skipped += ns
@@ -954,11 +1087,11 @@ def main():
                                     print(f"[FORWARD] 直接转发失败(媒体组): {link}")
                             except errors.BadRequest as e:
                                 if "CHAT_FORWARDS_RESTRICTED" in str(e) and force:
-                                    # force 模式：降级为逐条发送
-                                    print("[FORWARD] 媒体组受限，降级为逐条发送...")
-                                    for m in media_group_msgs:
-                                        _force_send_single_message(client, target_channel_id, m)
-                                    print(f"[FORWARD] 强制转发成功(媒体组降级): {link}")
+                                    # force 模式：下载后重新上传（保持媒体组结构）
+                                    if _force_send_media_group(client, target_channel_id, media_group_msgs):
+                                        print(f"[FORWARD] 强制转发成功(媒体组): {link}")
+                                    else:
+                                        print(f"[FORWARD] 强制转发失败(媒体组): {link}")
                                 else:
                                     raise
                         else:
@@ -1004,7 +1137,7 @@ def main():
                     continue
 
                 conn = get_db_connection()
-                messages = find_messages_to_forward(conn, channel_id, args.limit)
+                messages = find_messages_to_forward(conn, channel_id, args.limit, filter_by_source=False)
 
                 # 使用 -f 时先统计后确认
                 if args.force and messages:
@@ -1037,7 +1170,7 @@ def main():
                         continue
                     # 获取消息
                     conn = get_db_connection()
-                    msgs = find_messages_to_forward(conn, ch_id, args.limit)
+                    msgs = find_messages_to_forward(conn, ch_id, args.limit, filter_by_source=False)
                     if msgs:
                         all_messages.extend(msgs)
                     conn.close()
