@@ -11,8 +11,27 @@
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
+
+
+class FloodWaitFilter(logging.Filter):
+    """过滤 Pyrogram FloodWait 等待消息
+
+    这些消息（如 "Waiting for 5 seconds before continuing (required by channels.GetFullChannel)"）
+    只是告知性警告，实际的等待时间才是关键。抑制它们可以减少屏幕干扰。
+    """
+
+    FLOOD_WAIT_PATTERN = re.compile(r"Waiting for \d+ seconds before continuing")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # 过滤掉 FloodWait 等待消息
+        if record.levelno == logging.WARNING:
+            msg = record.getMessage()
+            if self.FLOOD_WAIT_PATTERN.search(msg):
+                return False
+        return True
 
 
 def get_log_dir() -> Path:
@@ -52,6 +71,7 @@ def setup_logger(name: str, level: str | None = None, use_file: bool = True) -> 
     console_handler.setLevel(logging.INFO)
     console_format = logging.Formatter("[%(name)s] %(levelname)s: %(message)s")
     console_handler.setFormatter(console_format)
+    console_handler.addFilter(FloodWaitFilter())
     logger.addHandler(console_handler)
 
     # 文件 handler
