@@ -90,7 +90,8 @@ class TestAnalyzeChannel:
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
-             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions:
+             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions, \
+             patch('modules.info.find_messages_by_views_top') as mock_views:
 
             mock_config.return_value = {
                 'forward_limit': 10,
@@ -106,6 +107,7 @@ class TestAnalyzeChannel:
 
             mock_sources.return_value = []
             mock_reactions.return_value = []
+            mock_views.return_value = []
 
             result = analyze_channel(-1001234567890)
 
@@ -121,7 +123,8 @@ class TestAnalyzeChannel:
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
-             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions:
+             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions, \
+             patch('modules.info.find_messages_by_views_top') as mock_views:
 
             mock_config.return_value = {
                 'forward_limit': 10,
@@ -138,6 +141,7 @@ class TestAnalyzeChannel:
             # Mock return: [(source_id, count)]
             mock_sources.return_value = [(-1001234567890, 5)]
             mock_reactions.return_value = []
+            mock_views.return_value = []
 
             result = analyze_channel(-1001234567890)
 
@@ -156,7 +160,8 @@ class TestAnalyzeChannel:
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
              patch('modules.info.get_forward_sources') as mock_sources, \
-             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions:
+             patch('modules.info.find_reaction_messages_over_threshold') as mock_reactions, \
+             patch('modules.info.find_messages_by_views_top') as mock_views:
 
             mock_config.return_value = {
                 'forward_limit': 10,
@@ -173,6 +178,7 @@ class TestAnalyzeChannel:
             mock_sources.return_value = []
             # Mock return: [(message_id, positive, heart, total)]
             mock_reactions.return_value = [(123, 50, 30, 80)]
+            mock_views.return_value = []
 
             result = analyze_channel(-1001234567890)
 

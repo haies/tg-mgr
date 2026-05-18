@@ -29,8 +29,6 @@ class ReactionData:
     positive: int
     heart: int
     total: int  # 全部表情反应的累计值
-    heart: int
-    total: int
 
 
 def extract_media_info(message: types.Message) -> MediaInfo:

@@ -27,9 +27,9 @@ import sqlite3
 import sys
 import time
 
-from pyrogram import Client, errors, types
+from pyrogram import Client, errors
 
-from database import get_database_path, get_db, get_schema_path
+from database import init_database, get_db, get_database_path, check_message_restricted, find_duplicates
 from database.messages import get_last_processed_id
 from modules.sync import force_reset_database
 from utils.media import extract_media_info, extract_reaction_data, extract_source_id
@@ -44,81 +44,6 @@ TG_MSG_LINK_PATTERN = re.compile(
 )
 
 # ====== SYNC FUNCTIONALITY ======
-
-
-def init_database() -> sqlite3.Connection:
-    """初始化数据库连接并创建表结构"""
-    db_path = get_database_path()
-    schema_path = get_schema_path()
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # 执行schema.sql内容
-    with open(schema_path) as f:
-        cursor.executescript(f.read())
-
-    # 确保channels表存在
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL
-        )
-    """)
-
-    # 创建索引以优化查询性能
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON messages(file_unique_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON messages(media_type)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_valid ON messages(is_valid)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_duplicate ON messages(is_duplicate)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)")
-
-    conn.commit()
-    return conn
-
-
-def check_restricted(message: types.Message) -> str:
-    """
-    多维度判断消息是否受限或无法显示
-    """
-    # 1. 基础类型检查
-    if not message or hasattr(message, "empty") and message.empty:
-        return "message is empty"
-
-    # 2. 检查消息本身的限制原因 (Message Level)
-    restrictions = getattr(message, "restrictions", None)
-    if restrictions:
-        for r in restrictions:
-            reason = getattr(r, "reason", "").lower()
-            # 定义不可跳过的硬性限制原因
-            hard_restrictions = ["copyright", "violence", "scam", "terms", "user_opt_out"]
-
-            if any(hard_reason in reason for hard_reason in hard_restrictions):
-                return reason
-
-    # 3. 检查转发源频道 (Chat Level)
-    source_chat = getattr(message, "forward_from_chat", None)
-    if source_chat:
-        restrictions = getattr(source_chat, "restrictions", None)
-        if restrictions:
-            for r in restrictions:
-                reason = getattr(r, "reason", "").lower()
-                hard_restrictions = ["copyright", "violence", "scam", "terms", "user_opt_out"]
-
-                if any(hard_reason in reason for hard_reason in hard_restrictions):
-                    return reason
-
-    # 4. 媒体有效性深度检查 - 只有当media对象存在但file_id为空时才算无效
-    if message.media:
-        media_obj = message.video or message.photo or message.document or message.animation
-        if media_obj:
-            # 检查file_id是否为空（这是最可靠的无效指标）
-            if not getattr(media_obj, "file_id", None):
-                return "media no file_id"
-
-    return ""
-
-
 
 
 def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen_files: set) -> int:
@@ -154,7 +79,7 @@ def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen
             reaction = extract_reaction_data(message)
 
             # Check message validity
-            is_valid = 0 if check_restricted(message) else 1
+            is_valid = 0 if check_message_restricted(message) else 1
 
             # 使用共享函数提取源频道 ID
             source_id = extract_source_id(message)
@@ -455,56 +380,6 @@ def find_junk_messages(conn: sqlite3.Connection) -> list:
     text_junk = [msg for msg in cursor.fetchall() if is_spam_text(msg[4])]
 
     return media_junk + text_junk
-
-
-def find_duplicates(conn: sqlite3.Connection) -> list:
-    """查找所有重复媒体组（基于文件唯一ID）
-
-    使用窗口函数在单次查询中获取所有待删除消息ID，避免 N+1 问题
-    """
-    cursor = conn.cursor()
-
-    # 使用窗口函数一次性获取所有重复消息
-    # ROW_NUMBER() 按 file_unique_id 分组，按 timestamp 排序
-    # rn = 1 表示保留的消息，rn > 1 表示待删除
-    cursor.execute("""
-        WITH RankedMessages AS (
-            SELECT
-                message_id,
-                file_unique_id,
-                file_size,
-                media_type,
-                timestamp,
-                ROW_NUMBER() OVER (
-                    PARTITION BY file_unique_id
-                    ORDER BY timestamp ASC
-                ) as rn
-            FROM messages
-            WHERE file_unique_id IS NOT NULL AND file_unique_id != ''
-        )
-        SELECT
-            file_unique_id,
-            MAX(file_size) as file_size,
-            MIN(media_type) as media_type,
-            MAX(CASE WHEN rn = 1 THEN message_id END) as keep_id,
-            GROUP_CONCAT(CASE WHEN rn > 1 THEN message_id END) as delete_ids
-        FROM RankedMessages
-        WHERE rn > 1 OR (
-            (SELECT COUNT(*) FROM messages m2 WHERE m2.file_unique_id = RankedMessages.file_unique_id) > 1
-            AND rn = 1
-        )
-        GROUP BY file_unique_id
-        HAVING COUNT(*) > 0 AND delete_ids IS NOT NULL
-    """)
-
-    duplicates = []
-    for row in cursor.fetchall():
-        file_unique_id, file_size, media_type, keep_id, delete_ids_str = row
-        if delete_ids_str:
-            delete_ids = [int(x) for x in delete_ids_str.split(',')]
-            duplicates.append((file_size, media_type, keep_id, delete_ids))
-
-    return duplicates
 
 
 def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict[str, int]:

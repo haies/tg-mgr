@@ -35,12 +35,8 @@ from pyrogram.types import (
 
 from database import get_database_path, get_db_connection
 from database.query import (
-    find_high_reaction_messages as query_high_reaction,
+    find_reaction_messages_for_display,
 )
-from database.query import (
-    find_reaction_messages_over_threshold,
-)
-from utils.media import row_to_reaction_dict
 from utils.telegram_client import get_client, get_config, get_log_path
 from utils.telegram_link import get_channel_address
 
@@ -201,9 +197,7 @@ def resolve_username_to_channel_id(client: Client, username: str) -> int | None:
 def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int, reaction_limit: int = 10) -> list[dict[str, Any]]:
     """查找要转发的消息（高反应优先，否则用浏览量）
 
-    与 info.py 的统计逻辑保持一致：
-    - 优先：反应 > 50 的消息，如果数量 > 配置限制，全部返回
-    - 否则：获取反应 > 0 的消息，按配置限制数量返回
+    使用统一的 find_reaction_messages_for_display 逻辑。
 
     Args:
         conn: 数据库连接
@@ -211,40 +205,9 @@ def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int, reaction
         reaction_limit: 高反应消息数量限制
 
     Returns:
-        消息列表，每条消息包含 message_id, source_id 等
+        消息列表，每条消息包含 message_id, positive, heart, total, views, source_id, media_type
     """
-    # 获取高反应消息（与info.py逻辑一致）
-    over50_results = find_reaction_messages_over_threshold(conn, threshold=50, limit=50)
-    over50_count = len(over50_results)
-
-    if over50_count > reaction_limit:
-        # 大于50的数量超过限制，全部返回
-        results = []
-        for row in over50_results:
-            results.append(row_to_reaction_dict(row))
-        return results
-
-    # 否则获取所有有反应的消息（threshold=0），按限制数量返回
-    all_results = find_reaction_messages_over_threshold(conn, threshold=0, limit=reaction_limit)
-    results = []
-    for row in all_results:
-        results.append(row_to_reaction_dict(row))
-
-    if results:
-        return results
-
-    # Fallback：浏览量 >= 1 的消息（使用统一查询函数）
-    from database.query import find_messages_by_views
-    view_results = find_messages_by_views(conn, min_views=1, limit=reaction_limit)
-    fallback_results = []
-    for row in view_results:
-        fallback_results.append({
-            "message_id": row[0],
-            "views": row[1],
-            "source_id": row[2],
-            "media_type": row[3],
-        })
-    return fallback_results
+    return find_reaction_messages_for_display(conn, reaction_limit=reaction_limit)
 
 
 def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:

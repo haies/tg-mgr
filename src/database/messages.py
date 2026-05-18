@@ -141,8 +141,8 @@ def insert_messages(
     return new_files, duplicates, skipped
 
 
-def _check_restricted(message: "types.Message") -> bool:
-    """检查消息是否受限"""
+def check_message_restricted(message: "types.Message") -> bool:
+    """检查消息是否受限（公开接口）"""
 
     # 1. 基础类型检查
     if not message or hasattr(message, "empty") and message.empty:

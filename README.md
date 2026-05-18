@@ -120,7 +120,7 @@ tg info -1001234567890 -f        # Force reset database and re-sync
 
 **Analysis Output:**
 - Forward sources (where messages are forwarded from)
-- Top views (highest view count messages)
+- Top views (messages with views > 8x average, supplemented to limit)
 - High-reaction messages (likes + hearts)
 
 ### forward - Message Forwarding

@@ -18,6 +18,19 @@ if str(src_path) not in sys.path:
 # 复用 telegram_client 中的 get_config_dir 函数
 from utils.telegram_client import get_config_dir  # noqa: E402
 
+# 重新导出数据库 messages 模块的核心函数（统一模块边界）
+from database.messages import (  # noqa: E402
+    check_message_restricted,
+    init_database,
+    get_last_processed_id,
+    insert_messages,
+    find_duplicates,
+    find_invalid_messages,
+    get_message_stats,
+    get_existing_files,
+    update_message_duplicate,
+)
+
 
 def get_project_tmp_dir() -> Path:
     """获取项目 tmp 目录路径"""
