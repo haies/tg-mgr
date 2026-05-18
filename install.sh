@@ -33,13 +33,13 @@ fi
 # 创建配置目录
 mkdir -p "$CONFIG_DIR"
 
-# 安装全局命令
+# 安装全局命令（使用 uv）
 echo "[1/4] 安装 tg-mgr 全局命令..."
 uv tool install --editable .
 
-# 安装依赖（通过 editable 安装，tool install 已包含依赖）
+# 安装依赖
 echo "[2/4] 安装项目依赖..."
-echo "  - 依赖已在步骤 1 中通过 uv tool install 自动安装"
+uv sync
 
 # 复制配置文件
 echo "[3/4] 配置 Telegram 凭证..."

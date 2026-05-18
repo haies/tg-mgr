@@ -27,8 +27,8 @@ This installs the `tg` global command and creates default config at `~/.tg-mgr/`
 ### Manual Install
 
 ```bash
-# Install dependencies
-uv pip install -r requirements.txt
+# Install dependencies via uv
+uv sync
 
 # Install global command
 uv tool install --editable .

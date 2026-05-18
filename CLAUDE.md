@@ -4,7 +4,7 @@
 
 **tg-mgr** is a Telegram channel management CLI tool. It syncs messages, deduplicates content, exports chats, and forwards high-reaction messages between channels.
 
-**Tech Stack:** Python 3.13+, Pyrogram 2.0.106 (MTProto), SQLite3, python-dotenv
+**Tech Stack:** Python 3.11+, Pyrogram 2.0.106 (MTProto), SQLite3, python-dotenv
 
 **Entry Point:** `tg <module>` where module is clean, export, forward, filter, info, init, or sessions.
 
@@ -73,10 +73,17 @@ tg sessions       # Session cleanup (NEW)
 ### Setup
 
 ```bash
+# Install via uv
 uv tool install --editable .
-pytest tests/ -v
-ruff check src/
-mypy src/
+
+# Run tests
+uv run pytest tests/ -v
+
+# Type check
+uv run mypy src/
+
+# Lint
+uv run ruff check src/
 ```
 
 ### Testing Philosophy
@@ -226,6 +233,33 @@ with get_db() as db:
 ## Installation
 
 ```bash
-uv pip install -e .
-uv pip install --python ~/.local/share/uv/tools/tg-mgr/bin/python tgcrypto
+# Using uv (recommended)
+uv tool install --editable .
+
+# Or using pip (legacy)
+pip install -e .
+```
+
+## Dependency Management (uv)
+
+```bash
+# Add runtime dependency
+uv add pyrogram
+
+# Add dev dependency
+uv add --dev pytest black mypy ruff
+
+# Sync dependencies
+uv sync
+
+# Update lock file
+uv lock
+```
+
+## Note on tgcrypto
+
+`tgcrypto` is a C extension that may need separate installation on some platforms:
+
+```bash
+uv pip install tgcrypto
 ```
