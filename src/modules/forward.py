@@ -201,13 +201,13 @@ def find_messages_to_forward(conn: sqlite3.Connection, channel_id: int, reaction
 
     Args:
         conn: 数据库连接
-        channel_id: 频道ID
+        channel_id: 频道ID（作为 source_id 过滤条件）
         reaction_limit: 高反应消息数量限制
 
     Returns:
         消息列表，每条消息包含 message_id, positive, heart, total, views, source_id, media_type
     """
-    return find_reaction_messages_for_display(conn, reaction_limit=reaction_limit)
+    return find_reaction_messages_for_display(conn, reaction_limit=reaction_limit, source_id=channel_id)
 
 
 def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:
@@ -309,7 +309,7 @@ def _get_original_media_group_message(
 def _get_media_group_messages(
     client: Client, channel_id: int, media_group_id: str, center_msg_id: int | None = None
 ) -> list[Message]:
-    """获取媒体组的所有消息
+    """获取媒体组的所有消息（批量获取优化版）
 
     Args:
         client: Telegram 客户端
@@ -331,54 +331,23 @@ def _get_media_group_messages(
         if center_msg_id:
             try:
                 center_msg = client.get_messages(channel_id, center_msg_id)
-                if center_msg and hasattr(center_msg, "media_group_id") and center_msg.media_group_id == media_group_id:
+                if center_msg and center_msg.media_group_id == media_group_id:
                     messages.append(center_msg)
                     seen_ids.add(center_msg.id)
             except Exception:
                 pass
 
-        # 向后搜索：从 center_msg_id 开始向后遍历（消息ID增大的方向）
-        if center_msg_id:
-            for offset in range(1, MAX_MEDIA_GROUP_SEARCH_OFFSET + 1):  # 最多向后搜索 20 条
-                msg_id = center_msg_id + offset
-                if msg_id in seen_ids:
-                    continue
-                try:
-                    msg = client.get_messages(channel_id, msg_id)
-                    if msg and hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
-                        messages.append(msg)
-                        seen_ids.add(msg_id)
-                    elif msg and (not hasattr(msg, "media_group_id") or msg.media_group_id is None):
-                        # 遇到非媒体组消息，停止向后搜索
-                        break
-                except Exception:
+        # 使用 get_chat_history 批量获取消息（代替逐 offset 调用 get_messages）
+        # 获取足够的消息以覆盖媒体组
+        for msg in client.get_chat_history(channel_id, limit=200):
+            if msg.media_group_id == media_group_id and msg.id not in seen_ids:
+                messages.append(msg)
+                seen_ids.add(msg.id)
+                if len(messages) >= 10:
                     break
-
-        # 向前搜索：从 center_msg_id 开始向前搜索（消息ID减小的方向）
-        if center_msg_id:
-            for offset in range(1, MAX_MEDIA_GROUP_SEARCH_OFFSET + 1):  # 最多向前搜索 20 条
-                msg_id = center_msg_id - offset
-                if msg_id in seen_ids or msg_id <= 0:
-                    continue
-                try:
-                    msg = client.get_messages(channel_id, msg_id)
-                    if msg and hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
-                        messages.append(msg)
-                        seen_ids.add(msg_id)
-                    elif msg and (not hasattr(msg, "media_group_id") or msg.media_group_id is None):
-                        # 遇到非媒体组消息，停止向前搜索
-                        break
-                except Exception:
-                    break
-        else:
-            # 没有 center_msg_id，回退到旧的遍历方式（取最新消息）
-            for msg in client.get_chat_history(channel_id, limit=100):
-                if hasattr(msg, "media_group_id") and msg.media_group_id == media_group_id:
-                    if msg.id not in seen_ids:
-                        messages.append(msg)
-                        seen_ids.add(msg.id)
-                        if len(messages) >= 10:
-                            break
+            elif seen_ids and (msg.media_group_id != media_group_id or msg.media_group_id is None):
+                # 遇到非媒体组消息且已有收集到消息，停止
+                break
 
         # 按 message_id 排序
         messages.sort(key=lambda m: m.id)
@@ -530,7 +499,7 @@ def _download_with_resume(client: Client, message: Message, target_path: str, ma
             # 验证下载完整性
             if result_path and os.path.exists(result_path):
                 final_size = os.path.getsize(result_path)
-                if file_size > 0 and final_size < file_size * 0.95:  # 允许5%误差
+                if file_size > 0 and final_size > 0 and final_size < file_size * 0.95:  # 允许5%误差
                     print(f"[DOWNLOAD] 下载不完整: {final_size} / {file_size} bytes，重试...")
                     continue
                 print(f"[DOWNLOAD] 下载完成: {final_size / 1024 / 1024:.1f} MB")

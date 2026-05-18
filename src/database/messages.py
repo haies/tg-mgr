@@ -83,7 +83,7 @@ def insert_messages(
             reaction = extract_reaction_data(message)
 
             # Check message validity
-            is_valid = 0 if _check_restricted(message) else 1
+            is_valid = 0 if check_message_restricted(message) else 1
 
             # 使用共享函数提取源频道 ID
             source_id = extract_source_id(message)

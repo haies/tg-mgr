@@ -41,19 +41,21 @@ def sync_channel(channel_id: str | None = None, db_path: str | None = None) -> N
     # 如果指定了自定义数据库路径，设置环境变量
     import os
 
-    original_db_path = None
+    original_db_path = os.environ.get("TG_MGR_DB_PATH")
+    db_path_was_set = False
     if db_path:
-        original_db_path = os.environ.get("TG_MGR_DB_PATH")
         os.environ["TG_MGR_DB_PATH"] = db_path
+        db_path_was_set = True
 
     try:
         _sync_impl(_channel_id)
     finally:
         # 恢复原始数据库路径
-        if original_db_path is not None:
-            os.environ["TG_MGR_DB_PATH"] = original_db_path
-        elif "TG_MGR_DB_PATH" in os.environ:
-            del os.environ["TG_MGR_DB_PATH"]
+        if db_path_was_set:
+            if original_db_path is not None:
+                os.environ["TG_MGR_DB_PATH"] = original_db_path
+            elif "TG_MGR_DB_PATH" in os.environ:
+                del os.environ["TG_MGR_DB_PATH"]
 
 
 def _sync_impl(_channel_id: str) -> None:

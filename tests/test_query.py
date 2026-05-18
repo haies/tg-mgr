@@ -55,6 +55,7 @@ class TestFindHighReactionMessages:
         temp_db.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 message_id INTEGER,
+                source_id INTEGER,
                 reactions TEXT,
                 is_valid INTEGER DEFAULT 1
             )

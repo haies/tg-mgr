@@ -71,51 +71,7 @@ class TestFindInvalidMessages:
             assert len(msg) >= 5  # message_id, file_unique_id, file_size, media_type, timestamp
 
 
-class TestInitDatabase:
-    """测试 init_database 函数"""
-
-    def test_init_creates_connection(self, tmp_path):
-        """测试初始化数据库"""
-        from modules.clean import init_database
-
-        # Mock get_database_path and get_schema_path
-        with patch('modules.clean.get_database_path') as mock_db_path, \
-             patch('modules.clean.get_schema_path') as mock_schema_path:
-
-            # Create temp schema file with proper columns for index creation
-            schema_file = tmp_path / "schema.sql"
-            schema_file.write_text("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY,
-                    message_id INTEGER,
-                    file_unique_id TEXT,
-                    file_size INTEGER,
-                    media_type TEXT,
-                    caption TEXT,
-                    is_duplicate INTEGER DEFAULT 0,
-                    is_valid INTEGER DEFAULT 1,
-                    reactions TEXT,
-                    source_id INTEGER,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS channels (
-                    id INTEGER PRIMARY KEY,
-                    title TEXT NOT NULL
-                );
-            """)
-
-            mock_db_path.return_value = tmp_path / "test.db"
-            mock_schema_path.return_value = schema_file
-
-            conn = init_database()
-
-            assert conn is not None
-            cursor = conn.cursor()
-            # Check tables exist
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [row[0] for row in cursor.fetchall()]
-            assert 'messages' in tables
-            conn.close()
+# TestInitDatabase removed - init_database was moved to database.messages module
 
 
 class TestRunDeduplicate:
@@ -126,7 +82,7 @@ class TestRunDeduplicate:
         from modules.clean import run_deduplicate
 
         with patch('modules.clean.get_config') as mock_config, \
-             patch('modules.clean.init_database') as mock_init_db, \
+             patch('modules.clean.get_db') as mock_get_db, \
              patch('modules.clean.find_duplicates') as mock_find:
 
             mock_config.return_value = {
@@ -135,9 +91,9 @@ class TestRunDeduplicate:
                 'channel_id': -1001234567890
             }
 
-            # Create a mock connection
             mock_conn = MagicMock()
-            mock_init_db.return_value = mock_conn
+            mock_get_db.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_get_db.return_value.__exit__ = MagicMock(return_value=False)
             mock_find.return_value = []  # No duplicates
 
             run_deduplicate(delete=False)
@@ -151,7 +107,7 @@ class TestRunDeduplicate:
         from modules.clean import run_deduplicate
 
         with patch('modules.clean.get_config') as mock_config, \
-             patch('modules.clean.init_database') as mock_init_db, \
+             patch('modules.clean.get_db') as mock_get_db, \
              patch('modules.clean.find_duplicates') as mock_find:
 
             mock_config.return_value = {
@@ -161,9 +117,8 @@ class TestRunDeduplicate:
             }
 
             mock_conn = MagicMock()
-            mock_init_db.return_value = mock_conn
-
-            # Return one duplicate group: (file_size, media_type, keep_id, delete_ids)
+            mock_get_db.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_get_db.return_value.__exit__ = MagicMock(return_value=False)
             mock_find.return_value = [(1024, 'photo', 1, [2, 3])]
 
             run_deduplicate(delete=False)
@@ -180,7 +135,7 @@ class TestRunDeinvalid:
         from modules.clean import run_deinvalid
 
         with patch('modules.clean.get_config') as mock_config, \
-             patch('modules.clean.init_database') as mock_init_db, \
+             patch('modules.clean.get_db') as mock_get_db, \
              patch('modules.clean.find_invalid_messages') as mock_find:
 
             mock_config.return_value = {
@@ -190,7 +145,8 @@ class TestRunDeinvalid:
             }
 
             mock_conn = MagicMock()
-            mock_init_db.return_value = mock_conn
+            mock_get_db.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_get_db.return_value.__exit__ = MagicMock(return_value=False)
             mock_find.return_value = []
 
             run_deinvalid(delete=False)
@@ -200,23 +156,22 @@ class TestRunDeinvalid:
 
 
 class TestCheckRestricted:
-    """测试 check_restricted 函数"""
+    """测试 check_message_restricted 函数（位于 database.messages）"""
 
     def test_check_restricted_empty_message(self):
         """测试空消息检查"""
-        from modules.clean import check_restricted
+        from database.messages import check_message_restricted
 
-        result = check_restricted(None)
-        assert result == "message is empty"
+        result = check_message_restricted(None)
+        assert result is True
 
     def test_check_restricted_valid_message(self):
-        """测试正常消息返回空字符串"""
-        from modules.clean import check_restricted
+        """测试正常消息返回 False"""
+        from database.messages import check_message_restricted
 
         mock_message = MagicMock()
         mock_message.empty = False
         mock_message.restrictions = None
-        mock_message.media = None
 
-        result = check_restricted(mock_message)
-        assert result == ""
+        result = check_message_restricted(mock_message)
+        assert result is False

@@ -20,19 +20,15 @@
 """
 
 import argparse
-import json
 import re
-import signal
 import sqlite3
 import sys
 import time
 
 from pyrogram import Client, errors
 
-from database import init_database, get_db, get_database_path, check_message_restricted, find_duplicates
-from database.messages import get_last_processed_id
-from modules.sync import force_reset_database
-from utils.media import extract_media_info, extract_reaction_data, extract_source_id
+from database import get_db, get_database_path, find_duplicates
+from modules.sync import force_reset_database, sync_channel
 from utils.telegram_client import get_client, get_config
 from utils.telegram_link import generate_tg_link
 
@@ -43,211 +39,7 @@ TG_MSG_LINK_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# ====== SYNC FUNCTIONALITY ======
-
-
-def process_batch(client: Client, conn: sqlite3.Connection, messages: list, seen_files: set) -> int:
-    """批量处理消息以提高性能"""
-    cursor = conn.cursor()
-    new_files = []
-    duplicates = []
-    skipped = 0
-
-    # First pass: extract all required data and identify duplicates
-    for message in messages:
-        # 使用共享函数提取媒体信息
-        media_info = extract_media_info(message)
-
-        # 检查是否为纯文字消息（无媒体）
-        is_text_message = media_info.media_type == "text" and not media_info.file_unique_id
-
-        # Skip media messages without valid file_unique_id
-        if not is_text_message and (not media_info.file_unique_id or media_info.file_unique_id == ""):
-            skipped += 1
-            continue
-
-        # 获取媒体组ID
-        media_group_id = getattr(message, "media_group_id", None) or ""
-
-        # Check for duplicates (skip for text messages - they don't have file_unique_id)
-        if not is_text_message and media_info.file_unique_id in seen_files:
-            duplicates.append(
-                (message.id, media_info.file_unique_id, media_info.file_size, media_info.media_type)
-            )
-        else:
-            # 使用共享函数提取反应数据
-            reaction = extract_reaction_data(message)
-
-            # Check message validity
-            is_valid = 0 if check_message_restricted(message) else 1
-
-            # 使用共享函数提取源频道 ID
-            source_id = extract_source_id(message)
-
-            # 提取消息文本
-            caption = message.caption or message.text or ""
-
-            # 对于文字消息，使用空字符串作为 file_unique_id
-            file_unique_id = media_info.file_unique_id if media_info.file_unique_id else ""
-
-            new_files.append(
-                (
-                    message.id,
-                    file_unique_id,
-                    media_info.file_size,
-                    media_info.media_type,
-                    caption,
-                    0,
-                    is_valid,
-                    json.dumps({"positive": reaction.positive, "heart": reaction.heart, "total": reaction.total}),
-                    source_id,
-                    media_group_id,
-                    media_info.views,
-                )
-            )
-            seen_files.add(media_info.file_unique_id)
-
-    # Process duplicates in bulk
-    if duplicates:
-        for duplicate in duplicates:
-            try:
-                cursor.execute(
-                    "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, is_duplicate) "
-                    "VALUES (?, ?, ?, ?, 1)",
-                    duplicate,
-                )
-            except sqlite3.IntegrityError:
-                print(f"[SYNC] 消息 #{duplicate[0]} 已存在，跳过插入")
-                continue
-
-    # Process new messages with bulk insert
-    if new_files:
-        try:
-            cursor.executemany(
-                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id, views) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                new_files,
-            )
-        except sqlite3.IntegrityError:
-            for new_file in new_files:
-                try:
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, media_group_id, views) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        new_file,
-                    )
-                except sqlite3.IntegrityError:
-                    print(f"[SYNC] 消息 #{new_file[0]} 已存在，跳过插入")
-
-    conn.commit()
-    return skipped
-
-
-def run_sync(channel_id: str | None = None) -> None:
-    """主同步流程
-
-    Args:
-        channel_id: 频道ID，如果为None则从配置文件读取
-    """
-    config = get_config()
-    _api_id = config["api_id"]
-    _api_hash = config["api_hash"]
-    _channel_id = channel_id if channel_id else config["channel_id"]
-
-    # 验证 channel_id 格式
-    if not _channel_id:
-        raise ValueError("channel_id is required but not provided")
-    _channel_id_str = str(_channel_id)
-    if not (_channel_id_str.startswith("-100") or _channel_id_str.lstrip("-").isdigit()):
-        raise ValueError(f"Invalid channel_id format: {_channel_id}")
-
-    conn = init_database()
-    try:
-        last_processed_id = get_last_processed_id(conn)
-
-        # 信号处理：优雅关闭
-        shutdown_requested = False
-        def signal_handler(signum, frame):
-            nonlocal shutdown_requested
-            print("\n[SIGNAL] 收到中断信号，正在优雅关闭...")
-            shutdown_requested = True
-
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        with get_client("tg-mgr") as client:
-            start_time = time.time()
-            print(f"[SYNC] 开始同步，从消息ID #{last_processed_id + 1} 开始...")
-            print(f"[DEBUG] CHANNEL_ID: {_channel_id}")
-
-            # 初始化已处理文件集合，包含数据库中已存在的文件
-            seen_files = set()
-            cursor = conn.cursor()
-            cursor.execute("SELECT file_unique_id, message_id FROM messages WHERE is_duplicate = 0")
-            for file_unique_id, message_id in cursor.fetchall():
-                seen_files.add(file_unique_id)
-
-            # 初始化计数器
-            total_messages = 0
-            total_skipped = 0
-
-            # 同步消息并传递 seen_files 集合
-            batch_size = 100
-            offset_id = last_processed_id
-            has_more = True
-
-            while has_more and not shutdown_requested:
-                batch_messages = []
-                try:
-                    for message in client.get_chat_history(
-                        _channel_id, offset_id=offset_id, limit=batch_size
-                    ):
-                        if shutdown_requested:
-                            break
-                        batch_messages.append(message)
-                        offset_id = message.id
-                except (errors.ChannelPrivate, errors.ChannelInvalid, errors.ChatForbidden):
-                    print(f"[SYNC] 频道 {_channel_id} 无法访问")
-                    break
-
-                if not batch_messages:
-                    has_more = False
-                    break
-
-                batch_skipped = process_batch(client, conn, batch_messages, seen_files)
-                total_messages += len(batch_messages)
-                total_skipped += batch_skipped
-                print(f"[SYNC] 处理进度 - 总消息数: {total_messages}\r", end="", flush=True)
-
-            # 统计各类消息数量
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT
-                    media_type,
-                    COUNT(*) as total,
-                    SUM(is_valid=0) as invalid_count,
-                    SUM(is_duplicate=1) as duplicate_count
-                FROM messages
-                GROUP BY media_type
-            """)
-            stats = cursor.fetchall()
-
-            print("\n[SYNC] 消息数量统计:")
-            for media_type, total, invalid_count, duplicate_count in stats:
-                print(f"  {media_type}: {total}")
-                if invalid_count:
-                    print(f"    - 无效数量: {invalid_count}")
-                if duplicate_count:
-                    print(f"    - 重复数量: {duplicate_count}")
-
-            if total_skipped > 0:
-                print(f"  跳过（无file_unique_id）: {total_skipped}")
-
-            end_time = time.time()
-            duration = end_time - start_time
-            print(f"[SYNC] 同步完成，耗时: {duration:.2f} 秒")
-    finally:
-        conn.close()
+# ====== CLEAN FUNCTIONALITY ======
 
 
 def exponential_backoff(retry_count: int, retry_delay_base: int) -> float:
@@ -393,8 +185,6 @@ def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict
         按media_type统计的待清理消息数量 dict
     """
     config = get_config()
-    _api_id = config["api_id"]
-    _api_hash = config["api_hash"]
     _channel_id = channel_id if channel_id else config["channel_id"]
 
     stats: dict[str, int] = {}
@@ -476,8 +266,6 @@ def run_deinvalid(delete: bool = False, channel_id: str | None = None) -> dict[s
         按media_type统计的待清理消息数量 dict
     """
     config = get_config()
-    _api_id = config["api_id"]
-    _api_hash = config["api_hash"]
     _channel_id = channel_id if channel_id else config["channel_id"]
 
     stats: dict[str, int] = {}
@@ -662,13 +450,7 @@ def main():
         return
 
     # 判断是否需要执行sync（无清理参数时默认同步，或显式指定-u）
-    should_sync = (
-        not args.d
-        and not args.i
-        and not args.s
-        or args.u
-        or any("u" in arg for arg in sys.argv[1:])
-    )
+    should_sync = not args.d and not args.i and not args.s or args.u
 
     # dry_run 模式（-y）影响所有删除操作
     dry_run = args.y
@@ -685,7 +467,7 @@ def main():
         # 只有在同步或强制重置时才清空数据库
         if should_sync or args.f:
             force_reset_database()
-            run_sync(channel_id=channel)
+            sync_channel(channel_id=channel)
 
         # 执行各项清理操作
         if args.d:

@@ -61,6 +61,11 @@ def get_sessions_dir() -> Path:
     return sessions_dir
 
 
+# 配置缓存（避免每次调用都读文件）
+_config_cache: dict | None = None
+_config_cache_mtime: float | None = None
+
+
 def get_config_path() -> Path:
     """获取配置文件路径（默认从 ~/.tg-mgr/config.json）"""
     return get_config_dir() / "config.json"
@@ -79,15 +84,22 @@ def is_interactive():
 
 
 def get_config() -> dict:
-    """获取配置
+    """获取配置（带缓存）
 
     敏感信息(api_id, api_hash, bot_token, channel_id)从环境变量读取（.env 文件），
-    其他配置从 config.json 读取。
+    其他配置从 config.json 读取。配置会被缓存，文件修改时会自动失效。
 
     Returns:
         配置字典，包含 api_id, api_hash, bot_token, channel_id 及 config.json 中的配置
     """
+    global _config_cache, _config_cache_mtime
+
     config_path = get_config_path()
+
+    # 检查缓存是否有效（文件未修改）
+    current_mtime = config_path.stat().st_mtime if config_path.exists() else None
+    if _config_cache is not None and _config_cache_mtime == current_mtime:
+        return _config_cache.copy()
 
     # 从环境变量读取敏感信息
     api_id = os.environ.get("TG_API_ID")
@@ -100,12 +112,12 @@ def get_config() -> dict:
         raise ValueError("Missing required environment variable: TG_API_HASH")
 
     try:
-        api_id = int(api_id)
+        api_id_int = int(api_id)
     except ValueError:
         raise ValueError("TG_API_ID must be a valid integer")
 
     config = {
-        "api_id": api_id,
+        "api_id": api_id_int,
         "api_hash": api_hash,
         "bot_token": os.environ.get("TG_BOT_TOKEN"),
         "channel_id": os.environ.get("TG_CHANNEL_ID"),
@@ -127,7 +139,11 @@ def get_config() -> dict:
                 if key in file_config:
                     config[key] = file_config[key]
 
-    return config
+    # 更新缓存
+    _config_cache = config
+    _config_cache_mtime = current_mtime
+
+    return config.copy()
 
 
 def create_client(config: dict, session_name: str = "tg-mgr") -> tuple[Client, bool]:
