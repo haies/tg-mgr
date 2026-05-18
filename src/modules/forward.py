@@ -50,6 +50,38 @@ DEFAULT_RECURSION_DEPTH = 5
 MAX_MEDIA_GROUP_SEARCH_OFFSET = 20
 
 
+def _build_stats_str(total: int, views: int, is_media_group: bool = False) -> str:
+    """构建统计信息字符串
+
+    Args:
+        total: 反应总数
+        views: 浏览量
+        is_media_group: 是否为媒体组
+
+    Returns:
+        格式如 "(反应:5, 浏览:1234，媒体组)" 或 "(浏览:1234，媒体组)"
+    """
+    parts = []
+    if total > 0:
+        parts.append(f"反应:{total}")
+    if views > 0:
+        parts.append(f"浏览:{views}")
+    if is_media_group:
+        parts.append("媒体组")
+    if parts:
+        return f" ({', '.join(parts)})"
+    return ""
+
+
+def _get_reaction_total(message: Message) -> int:
+    """从消息中提取反应总数"""
+    total = 0
+    if message.reactions:
+        for reaction in message.reactions:
+            total += reaction.count
+    return total
+
+
 def summarize_messages_for_forward(
     conn: sqlite3.Connection,
     messages: list[dict[str, Any]]
@@ -770,7 +802,10 @@ def forward_messages_batch(
                             # 有完整媒体组，转发整个组
                             if _forward_media_group(client, source_channel_id, target_id, media_group_msgs):
                                 forwarded += 1
-                                print(f"[FORWARD] 转发成功(媒体组): {link} -> {target_id}")
+                                total = msg.get("total", 0)
+                                views = msg.get("views", 0)
+                                stats = _build_stats_str(total, views, is_media_group=True)
+                                print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
                             else:
                                 failed += 1
                                 continue
@@ -782,7 +817,10 @@ def forward_messages_batch(
                                 message_id=msg_id,
                             )
                             forwarded += 1
-                            print(f"[FORWARD] 转发成功(媒体组降级): {link} -> {target_id}")
+                            total = msg.get("total", 0)
+                            views = msg.get("views", 0)
+                            stats = _build_stats_str(total, views, is_media_group=True)
+                            print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
                     else:
                         # 普通消息，使用 copy_message
                         client.copy_message(
@@ -791,7 +829,10 @@ def forward_messages_batch(
                             message_id=msg_id,
                         )
                         forwarded += 1
-                        print(f"[FORWARD] 转发成功: {link} -> {target_id}")
+                        total = msg.get("total", 0)
+                        views = msg.get("views", 0)
+                        stats = _build_stats_str(total, views)
+                        print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
 
                     # 写入日志
                     if write_date:
@@ -819,7 +860,10 @@ def forward_messages_batch(
                                     )
                                     if media_group_msgs and _force_send_media_group(client, target_id, media_group_msgs):
                                         forwarded += 1
-                                        print(f"[FORWARD] 强制转发成功(媒体组): {link}")
+                                        total = msg.get("total", 0)
+                                        views = msg.get("views", 0)
+                                        stats = _build_stats_str(total, views, is_media_group=True)
+                                        print(f"[FORWARD] 强制转发成功: {link}{stats}")
                                         continue
                                     else:
                                         failed += 1
@@ -828,7 +872,10 @@ def forward_messages_batch(
                                     # 非媒体组消息，使用单条强制转发
                                     if forward_single_message(client, source_channel_id, target_id, msg_id):
                                         forwarded += 1
-                                        print(f"[FORWARD] 强制转发成功: {link}")
+                                        total = msg.get("total", 0)
+                                        views = msg.get("views", 0)
+                                        stats = _build_stats_str(total, views)
+                                        print(f"[FORWARD] 强制转发成功: {link}{stats}")
                                         continue
                                     else:
                                         failed += 1
@@ -916,15 +963,18 @@ def forward_with_recursion(
 
         conn = get_db_connection()
 
+        # 获取平均浏览量用于计算阈值
+        avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
+        avg_views = avg_row[0] if avg_row and isinstance(avg_row[0], (int, float)) else 0
+        threshold = avg_views * 8 if avg_views > 0 else 0
+
         # 查找要转发的消息（第1层不按source_id过滤，与info一致；递归层按source_id过滤）
         filter_by_source = current_depth > 1
         messages = find_messages_to_forward(conn, channel_id, reaction_limit, filter_by_source=filter_by_source)
-        if messages:
-            total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
-            total_views = sum(m.get("views", 0) for m in messages)
-            print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息 (反应数: {total}, 浏览量: {total_views})")
-        else:
-            print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 0 条消息")
+        # 统计高反应和高浏览量消息数量
+        high_reaction_count = sum(1 for m in messages if m.get("total", 0) > 0)
+        high_views_count = sum(1 for m in messages if m.get("views", 0) > threshold)
+        print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
 
         if messages:
             # 转发到目标
@@ -1082,14 +1132,20 @@ def main():
                             # 有完整媒体组，尝试转发
                             try:
                                 if _forward_media_group(client, channel_id, target_channel_id, media_group_msgs, force=force):
-                                    print(f"[FORWARD] 直接转发成功(媒体组): {link}")
+                                    total = _get_reaction_total(original_msg)
+                                    views = original_msg.views or 0
+                                    stats = _build_stats_str(total, views, is_media_group=True)
+                                    print(f"[FORWARD] 直接转发成功: {link}{stats}")
                                 else:
                                     print(f"[FORWARD] 直接转发失败(媒体组): {link}")
                             except errors.BadRequest as e:
                                 if "CHAT_FORWARDS_RESTRICTED" in str(e) and force:
                                     # force 模式：下载后重新上传（保持媒体组结构）
                                     if _force_send_media_group(client, target_channel_id, media_group_msgs):
-                                        print(f"[FORWARD] 强制转发成功(媒体组): {link}")
+                                        total = _get_reaction_total(original_msg)
+                                        views = original_msg.views or 0
+                                        stats = _build_stats_str(total, views, is_media_group=True)
+                                        print(f"[FORWARD] 强制转发成功: {link}{stats}")
                                     else:
                                         print(f"[FORWARD] 强制转发失败(媒体组): {link}")
                                 else:
@@ -1097,12 +1153,18 @@ def main():
                         else:
                             # 媒体组消息但找不到其他同组消息，降级为重新发送
                             _force_send_single_message(client, target_channel_id, original_msg)
-                            print(f"[FORWARD] 直接转发成功(媒体组降级): {link}")
+                            total = _get_reaction_total(original_msg)
+                            views = original_msg.views or 0
+                            stats = _build_stats_str(total, views, is_media_group=True)
+                            print(f"[FORWARD] 直接转发成功: {link}{stats}")
                     else:
                         # 普通消息
                         if force:
                             _force_send_single_message(client, target_channel_id, original_msg)
-                            print(f"[FORWARD] 强制转发成功: {link}")
+                            total = _get_reaction_total(original_msg)
+                            views = original_msg.views or 0
+                            stats = _build_stats_str(total, views)
+                            print(f"[FORWARD] 强制转发成功: {link}{stats}")
                         else:
                             # 普通消息，使用 copy_message
                             client.copy_message(
@@ -1110,7 +1172,10 @@ def main():
                                 from_chat_id=channel_id,
                                 message_id=msg_id,
                             )
-                            print(f"[FORWARD] 直接转发成功: {link}")
+                            total = _get_reaction_total(original_msg)
+                            views = original_msg.views or 0
+                            stats = _build_stats_str(total, views)
+                            print(f"[FORWARD] 直接转发成功: {link}{stats}")
                 except Exception as e:
                     print(f"[FORWARD] 直接转发失败: {link} - {e}")
 
@@ -1148,9 +1213,13 @@ def main():
                         return
 
                 if messages:
-                    total = sum(m.get("positive", 0) + m.get("heart", 0) for m in messages)
-                    total_views = sum(m.get("views", 0) for m in messages)
-                    print(f"[FORWARD] 频道 {channel_id} 找到 {len(messages)} 条消息 (反应数: {total}, 浏览量: {total_views})")
+                    # 统计高反应和高浏览量消息数量
+                    avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
+                    avg_views = avg_row[0] if avg_row and isinstance(avg_row[0], (int, float)) else 0
+                    threshold = avg_views * 8 if avg_views > 0 else 0
+                    high_reaction_count = sum(1 for m in messages if m.get("total", 0) > 0)
+                    high_views_count = sum(1 for m in messages if m.get("views", 0) > threshold)
+                    print(f"[FORWARD] 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
                 else:
                     print(f"[FORWARD] 频道 {channel_id} 找到 0 条消息")
                 if messages:
