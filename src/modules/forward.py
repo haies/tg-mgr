@@ -933,7 +933,7 @@ def forward_messages_batch(
                                         client, source_channel_id, original_msg.media_group_id, msg_id
                                     )
                                     print(f"[DOWNLOAD] 下载完成: {link} ({len(media_group_msgs)} 条)")
-                                    print(f"[UPLOAD] 上传中: {link} (媒体组 {len(media_group_msgs)} 条)")
+                                    print(f"[UPLOAD] 上传中: {link} | {size_mb:.1f}MB (媒体组 {len(media_group_msgs)} 条)")
                                     if media_group_msgs and _force_send_media_group(client, target_id, media_group_msgs):
                                         forwarded += 1
                                         total = msg.get("total", 0)
