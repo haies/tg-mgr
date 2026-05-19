@@ -315,7 +315,7 @@ def find_messages_to_forward(
     # 补充 reaction 消息的 views 字段（从 view_results 中获取）
     view_map = {row[0]: row[1] for row in view_rows}
     for msg in merged:
-        if msg.get("total", 0) > 0 and "views" not in msg:
+        if "views" not in msg:
             msg["views"] = view_map.get(msg["message_id"], 0)
 
     return merged
