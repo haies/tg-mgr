@@ -389,7 +389,7 @@ class TestForceConfirmationRecursive:
             mock_conn = MagicMock()
             mock_get_db.return_value = mock_conn
 
-            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f', '-r', '3']):
+            with patch('sys.argv', ['tg', '123', '-o', '-1001', '-f', '-r', '3']):
                 forward_main()
 
             # 确认在递归前被调用
@@ -424,7 +424,7 @@ class TestForceConfirmationRecursive:
             mock_conn = MagicMock()
             mock_get_db.return_value = mock_conn
 
-            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-r', '3']):
+            with patch('sys.argv', ['tg', '123', '-o', '-1001', '-r', '3']):
                 forward_main()
 
             # -f 未使用时，confirm_forward 不应被调用
@@ -463,7 +463,7 @@ class TestForceConfirmationRecursive:
             mock_conn = MagicMock()
             mock_get_db.return_value = mock_conn
 
-            with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f', '-r', '3']):
+            with patch('sys.argv', ['tg', '123', '-o', '-1001', '-f', '-r', '3']):
                 forward_main()
 
             # 确认被调用

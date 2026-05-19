@@ -8,6 +8,7 @@
 
 import sqlite3
 import time
+from pathlib import Path
 
 from database import get_database_path, get_schema_path
 from database.messages import (
@@ -58,10 +59,25 @@ def sync_channel(channel_id: str | None = None, db_path: str | None = None) -> N
                 del os.environ["TG_MGR_DB_PATH"]
 
 
-def _sync_impl(_channel_id: str) -> None:
-    """同步实现"""
+def _sync_impl(_channel_id: str, _db_path: Path | None = None) -> None:
+    """同步实现
+
+    Args:
+        _channel_id: 频道ID
+        _db_path: 可选的数据库路径（优先使用环境变量 TG_MGR_DB_PATH）
+    """
+    import os
+
     schema_path = get_schema_path()
-    db_path = get_database_path()
+
+    # 优先使用环境变量（由 sync_channel 设置），其次使用传入的参数，最后使用默认路径
+    db_path_str = os.environ.get("TG_MGR_DB_PATH")
+    if db_path_str:
+        db_path = Path(db_path_str)
+    elif _db_path:
+        db_path = _db_path
+    else:
+        db_path = get_database_path()
 
     conn = sqlite3.connect(str(db_path))
     try:
