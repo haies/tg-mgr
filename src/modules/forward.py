@@ -820,6 +820,14 @@ def forward_messages_batch(
 
         for msg in messages:
             msg_id = msg["message_id"]
+            # 检查是否是媒体组消息（提前设置，供后续复用）
+            try:
+                original_msg = _get_original_media_group_message(client, source_channel_id, msg_id)
+                msg["is_media_group"] = bool(original_msg and original_msg.media_group_id)
+            except Exception:
+                msg["is_media_group"] = False
+                original_msg = None
+
             link = f"{get_channel_address(source_channel_id)}/{msg_id}"
 
             for target_id in target_channel_ids:
@@ -830,8 +838,7 @@ def forward_messages_batch(
                         continue
 
                 try:
-                    # 检查是否是媒体组消息
-                    original_msg = _get_original_media_group_message(client, source_channel_id, msg_id)
+                    # 检查是否是媒体组消息（已在循环开始时获取 original_msg）
                     if original_msg and original_msg.media_group_id:
                         # 媒体组消息，使用 send_media_group 转发
                         media_group_msgs = _get_media_group_messages(client, source_channel_id, original_msg.media_group_id, msg_id)
