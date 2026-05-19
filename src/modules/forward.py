@@ -20,8 +20,10 @@ import re
 import sqlite3
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
+from database import get_database_dir, get_database_path, get_db_connection
 from pyrogram import Client, errors
 from pyrogram.types import (
     InputMedia,
@@ -32,8 +34,6 @@ from pyrogram.types import (
     InputMediaVideo,
     Message,
 )
-
-from database import get_database_path, get_db_connection
 from database.query import (
     find_reaction_messages_for_display,
     get_forward_sources,
@@ -314,23 +314,41 @@ def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:
     return list(source_channels)
 
 
-def sync_channel_for_forward(channel_id: int) -> None:
-    """为转发同步频道数据（使用临时数据库）"""
+def get_channel_temp_db_path(channel_id: int) -> Path:
+    """获取频道专属的临时数据库路径（不会被后续同步覆盖）"""
+    db_dir = get_database_dir()
+    return db_dir / f"messages_{abs(channel_id)}.tmp.db"
+
+
+def cleanup_channel_temp_dbs(channel_ids: list[int]) -> None:
+    """清理频道专属临时数据库"""
+    for ch_id in channel_ids:
+        temp_path = get_channel_temp_db_path(ch_id)
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+
+
+def sync_channel_for_forward(channel_id: int, temp_db_path: Path | None = None) -> None:
+    """为转发同步频道数据（使用临时数据库）
+
+    Args:
+        channel_id: 频道ID
+        temp_db_path: 可选的临时数据库路径（用于per-channel模式）
+    """
     from modules.sync import sync_channel
 
-    temp_db_path = get_database_path().with_suffix(".tmp.db")
-    original_db_path = get_database_path()
+    if temp_db_path is None:
+        temp_db_path = get_channel_temp_db_path(channel_id)
 
     try:
         sync_channel(channel_id=str(channel_id), db_path=str(temp_db_path))
     finally:
         pass  # sync_channel handles env cleanup internally
 
-    # 同步成功后，替换旧数据库
-    if temp_db_path.exists():
-        if original_db_path.exists():
-            original_db_path.unlink()
-        temp_db_path.rename(original_db_path)
+    # 注意：不移动到主数据库，保持temp DB独立直到cleanup
 
 
 def forward_single_message(
@@ -961,7 +979,9 @@ def forward_with_recursion(
             print(f"[FORWARD] 深度 {current_depth}: 同步频道 {channel_id} 失败: {e}")
             continue
 
-        conn = get_db_connection()
+        # 连接频道专属的临时数据库（不是主数据库）
+        temp_db_path = get_channel_temp_db_path(channel_id)
+        conn = sqlite3.connect(str(temp_db_path))
 
         # 获取平均浏览量用于计算阈值
         avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
@@ -1201,7 +1221,9 @@ def main():
                     print(f"[FORWARD] 同步失败: {e}")
                     continue
 
-                conn = get_db_connection()
+                # 连接频道专属的临时数据库（不是主数据库）
+                temp_db_path = get_channel_temp_db_path(channel_id)
+                conn = sqlite3.connect(str(temp_db_path))
                 messages = find_messages_to_forward(conn, channel_id, args.limit, filter_by_source=False)
 
                 # 使用 -f 时先统计后确认
@@ -1210,6 +1232,7 @@ def main():
                     if not confirm_forward(messages, summary):
                         print("[FORWARD] 已取消")
                         conn.close()
+                        cleanup_channel_temp_dbs([channel_id])
                         return
 
                 if messages:
@@ -1226,34 +1249,68 @@ def main():
                     f, s, fa = forward_messages_batch(channel_id, [target_channel_id], messages, args.check, args.force)
                     print(f"[FORWARD] 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")
                 conn.close()
+                cleanup_channel_temp_dbs([channel_id])
         else:
             # 递归转发 - 使用 -f 时先统计后确认
             if args.force:
-                all_messages = []
+                # 同步所有频道到各自的临时数据库
+                synced_channels = []
+                channel_messages: dict[int, list] = {}
                 for ch_id in channel_ids:
-                    # 同步频道
                     try:
                         sync_channel_for_forward(ch_id)
+                        synced_channels.append(ch_id)
+                        # 从频道专属temp DB获取消息
+                        temp_db_path = get_channel_temp_db_path(ch_id)
+                        temp_conn = sqlite3.connect(str(temp_db_path))
+                        msgs = find_messages_to_forward(temp_conn, ch_id, args.limit, filter_by_source=False)
+                        if msgs:
+                            channel_messages[ch_id] = msgs
+                        temp_conn.close()
                     except Exception as e:
                         print(f"[FORWARD] 同步频道 {ch_id} 失败: {e}")
                         continue
-                    # 获取消息
-                    conn = get_db_connection()
-                    msgs = find_messages_to_forward(conn, ch_id, args.limit, filter_by_source=False)
-                    if msgs:
-                        all_messages.extend(msgs)
-                    conn.close()
 
-                if all_messages:
-                    # 重新从数据库统计（获取 file_size）
-                    conn = get_db_connection()
-                    summary = summarize_messages_for_forward(conn, all_messages)
-                    conn.close()
-                    if not confirm_forward(all_messages, summary):
-                        print("[FORWARD] 已取消")
-                        return
-                else:
+                if not synced_channels:
+                    print("[FORWARD] 所有频道同步失败")
+                    return
+
+                # 计算每个频道的统计信息
+                channel_summaries: dict[int, dict] = {}
+                all_messages = []
+                for ch_id in synced_channels:
+                    if ch_id in channel_messages:
+                        temp_db_path = get_channel_temp_db_path(ch_id)
+                        temp_conn = sqlite3.connect(str(temp_db_path))
+                        summary = summarize_messages_for_forward(temp_conn, channel_messages[ch_id])
+                        temp_conn.close()
+                        channel_summaries[ch_id] = summary
+                        all_messages.extend(channel_messages[ch_id])
+
+                if not all_messages:
                     print("[FORWARD] 所有频道无可转发消息")
+                    cleanup_channel_temp_dbs(synced_channels)
+                    return
+
+                # 显示每个频道的统计信息
+                print(f"[FORWARD] 待转发消息统计（{len(synced_channels)} 个频道）：")
+                total_count = 0
+                total_media_count = 0
+                total_size_mb = 0.0
+                for ch_id in synced_channels:
+                    if ch_id in channel_summaries:
+                        s = channel_summaries[ch_id]
+                        total_count += s["total_count"]
+                        total_media_count += s["media_count"]
+                        total_size_mb += s["total_size_mb"]
+                        print(f"  频道 {ch_id}: {s['total_count']} 条消息, {s['media_count']} 条有媒体, {s['total_size_mb']:.1f} MB")
+                print(f"  合计: {total_count} 条消息, {total_media_count} 条有媒体, {total_size_mb:.1f} MB")
+                print()
+
+                summary = {"total_count": total_count, "media_count": total_media_count, "total_size_mb": total_size_mb}
+                if not confirm_forward(all_messages, summary):
+                    print("[FORWARD] 已取消")
+                    cleanup_channel_temp_dbs(synced_channels)
                     return
 
             print(f"[FORWARD] 处理 {len(channel_ids)} 个频道（递归深度 {recursion_depth}）...")
@@ -1268,6 +1325,9 @@ def main():
             )
             print("\n[FORWARD] ========== 全部完成 ==========")
             print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")
+
+            # 清理临时数据库
+            cleanup_channel_temp_dbs(channel_ids)
 
 
 # 向后兼容别名

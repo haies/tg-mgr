@@ -162,17 +162,46 @@ class TestForceConfirmationNonRecursive:
         with patch('modules.forward.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
              patch('modules.forward.sync_channel_for_forward'), \
-             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.get_channel_temp_db_path') as mock_temp_db_path, \
              patch('modules.forward.find_messages_to_forward') as mock_find, \
              patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.confirm_forward') as mock_confirm, \
              patch('modules.forward.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.cleanup_channel_temp_dbs') as mock_cleanup, \
              patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
 
             # Setup mocks
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            # Mock temp db path to return a real temp db with proper schema
+            import tempfile
+            import sqlite3
+            temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+            temp_db.close()
+            # Create the messages table with proper schema
+            conn = sqlite3.connect(temp_db.name)
+            conn.execute("""
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL,
+                    file_unique_id TEXT NOT NULL,
+                    file_size INTEGER,
+                    media_type TEXT,
+                    caption TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_duplicate BOOLEAN DEFAULT 0,
+                    is_valid BOOLEAN DEFAULT 1,
+                    reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
+                    source_id INTEGER,
+                    views INTEGER DEFAULT 0,
+                    media_group_id TEXT,
+                    UNIQUE(message_id)
+                )
+            """)
+            conn.close()
+            mock_temp_db_path.return_value = Path(temp_db.name)
 
             mock_find.return_value = [
                 {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
@@ -181,10 +210,6 @@ class TestForceConfirmationNonRecursive:
             mock_summarize.return_value = {"total_count": 2, "media_count": 1, "total_size_mb": 15.0}
             mock_confirm.return_value = True
             mock_forward.return_value = (2, 0, 0)
-
-            # Mock the connection
-            mock_conn = MagicMock()
-            mock_get_db.return_value = mock_conn
 
             # Patch argparse (positional sources, -o for target, -f for force)
             with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f']):
@@ -202,24 +227,48 @@ class TestForceConfirmationNonRecursive:
         with patch('modules.forward.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
              patch('modules.forward.sync_channel_for_forward'), \
-             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.get_channel_temp_db_path') as mock_temp_db_path, \
              patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.confirm_forward') as mock_confirm, \
              patch('modules.forward.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.cleanup_channel_temp_dbs') as mock_cleanup, \
              patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
 
+            import tempfile
+            import sqlite3
+            temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+            temp_db.close()
+            # Create the messages table with proper schema
+            conn = sqlite3.connect(temp_db.name)
+            conn.execute("""
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL,
+                    file_unique_id TEXT NOT NULL,
+                    file_size INTEGER,
+                    media_type TEXT,
+                    caption TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_duplicate BOOLEAN DEFAULT 0,
+                    is_valid BOOLEAN DEFAULT 1,
+                    reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
+                    source_id INTEGER,
+                    views INTEGER DEFAULT 0,
+                    media_group_id TEXT,
+                    UNIQUE(message_id)
+                )
+            """)
+            conn.close()
+            mock_temp_db_path.return_value = Path(temp_db.name)
+
             mock_find.return_value = [
                 {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
             ]
             mock_forward.return_value = (1, 0, 0)
-
-            mock_conn = MagicMock()
-            mock_get_db.return_value = mock_conn
 
             with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001']):
                 forward_main()
@@ -236,25 +285,50 @@ class TestForceConfirmationNonRecursive:
         with patch('modules.forward.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
              patch('modules.forward.sync_channel_for_forward'), \
-             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.get_channel_temp_db_path') as mock_temp_db_path, \
              patch('modules.forward.find_messages_to_forward') as mock_find, \
              patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.confirm_forward') as mock_confirm, \
              patch('modules.forward.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.cleanup_channel_temp_dbs') as mock_cleanup, \
              patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
 
+            import tempfile
+            import sqlite3
+            temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+            temp_db.close()
+            # Create the messages table with proper schema
+            conn = sqlite3.connect(temp_db.name)
+            conn.execute("""
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL,
+                    file_unique_id TEXT NOT NULL,
+                    file_size INTEGER,
+                    media_type TEXT,
+                    caption TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_duplicate BOOLEAN DEFAULT 0,
+                    is_valid BOOLEAN DEFAULT 1,
+                    reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
+                    source_id INTEGER,
+                    views INTEGER DEFAULT 0,
+                    media_group_id TEXT,
+                    UNIQUE(message_id)
+                )
+            """)
+            conn.close()
+            mock_temp_db_path.return_value = Path(temp_db.name)
+
             mock_find.return_value = [
                 {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
             ]
             mock_summarize.return_value = {"total_count": 1, "media_count": 0, "total_size_mb": 0.0}
             mock_confirm.return_value = False  # 用户拒绝
-
-            mock_conn = MagicMock()
-            mock_get_db.return_value = mock_conn
 
             with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f']):
                 forward_main()
@@ -437,15 +511,43 @@ class TestForwardForceFlagConfirmation:
         with patch('modules.forward.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
              patch('modules.forward.sync_channel_for_forward'), \
-             patch('modules.forward.get_db_connection') as mock_get_db, \
+             patch('modules.forward.get_channel_temp_db_path') as mock_temp_db_path, \
              patch('modules.forward.find_messages_to_forward') as mock_find, \
              patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.cleanup_channel_temp_dbs') as mock_cleanup, \
              patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_get_client.return_value.__exit__ = MagicMock(return_value=False)
+
+            import tempfile
+            import sqlite3
+            temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+            temp_db.close()
+            # Create the messages table with proper schema
+            conn = sqlite3.connect(temp_db.name)
+            conn.execute("""
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL,
+                    file_unique_id TEXT NOT NULL,
+                    file_size INTEGER,
+                    media_type TEXT,
+                    caption TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_duplicate BOOLEAN DEFAULT 0,
+                    is_valid BOOLEAN DEFAULT 1,
+                    reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
+                    source_id INTEGER,
+                    views INTEGER DEFAULT 0,
+                    media_group_id TEXT,
+                    UNIQUE(message_id)
+                )
+            """)
+            conn.close()
+            mock_temp_db_path.return_value = Path(temp_db.name)
 
             mock_find.return_value = [
                 {"message_id": 1, "positive": 10, "heart": 5, "views": 100},
@@ -453,9 +555,6 @@ class TestForwardForceFlagConfirmation:
             ]
             mock_summarize.return_value = {"total_count": 2, "media_count": 1, "total_size_mb": 15.0}
             mock_forward.return_value = (2, 0, 0)
-
-            mock_conn = MagicMock()
-            mock_get_db.return_value = mock_conn
 
             with patch('sys.argv', ['tg', 'forward', '123', '-o', '-1001', '-f']):
                 forward_main()
