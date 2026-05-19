@@ -324,6 +324,8 @@ def find_messages_to_forward(
             source_id = source_id_map.get(msg["message_id"])
             if source_id:
                 msg["source_id"] = source_id
+            else:
+                msg["source_id"] = channel_id  # fallback to current channel
 
     return merged
 
