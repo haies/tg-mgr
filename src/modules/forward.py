@@ -312,11 +312,13 @@ def find_messages_to_forward(
             seen_ids.add(msg["message_id"])
             merged.append(msg)
 
-    # 补充 reaction 消息的 views 字段（从 view_results 中获取）
+    # 补充 reaction 消息的 views 字段（从 view_results 中获取，仅当 views > 0）
     view_map = {row[0]: row[1] for row in view_rows}
     for msg in merged:
         if "views" not in msg:
-            msg["views"] = view_map.get(msg["message_id"], 0)
+            views = view_map.get(msg["message_id"], 0)
+            if views > 0:
+                msg["views"] = views
 
     return merged
 
