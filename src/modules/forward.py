@@ -830,6 +830,33 @@ def forward_messages_batch(
 
             link = f"{get_channel_address(source_channel_id)}/{msg_id}"
 
+            # 获取文件大小用于进度显示
+            file_size = 0
+            try:
+                if original_msg:
+                    # 尝试从 original_msg 获取文件大小
+                    if hasattr(original_msg, 'file_size') and original_msg.file_size:
+                        file_size = int(original_msg.file_size) if isinstance(original_msg.file_size, (int, float)) else 0
+                    elif hasattr(original_msg, 'photo') and original_msg.photo:
+                        photo_file_size = getattr(original_msg.photo, 'file_size', 0)
+                        file_size = int(photo_file_size) if isinstance(photo_file_size, (int, float)) else 0
+                    elif hasattr(original_msg, 'video') and original_msg.video:
+                        video_file_size = getattr(original_msg.video, 'file_size', 0)
+                        file_size = int(video_file_size) if isinstance(video_file_size, (int, float)) else 0
+                    elif hasattr(original_msg, 'document') and original_msg.document:
+                        doc_file_size = getattr(original_msg.document, 'file_size', 0)
+                        file_size = int(doc_file_size) if isinstance(doc_file_size, (int, float)) else 0
+            except Exception:
+                file_size = 0
+
+            size_mb = file_size / 1024 / 1024 if file_size else 0
+            is_media_group = msg.get("is_media_group", False)
+
+            # 下载阶段提示
+            if size_mb > 0:
+                group_suffix = " (媒体组)" if is_media_group else ""
+                print(f"[DOWNLOAD] 下载中: {link} | {size_mb:.1f}MB{group_suffix}")
+
             for target_id in target_channel_ids:
                 if check_exists:
                     if message_exists_in_channel(client, target_id, msg_id):
@@ -844,6 +871,8 @@ def forward_messages_batch(
                         media_group_msgs = _get_media_group_messages(client, source_channel_id, original_msg.media_group_id, msg_id)
                         if media_group_msgs:
                             # 有完整媒体组，转发整个组
+                            # 上传阶段提示
+                            print(f"[UPLOAD] 上传中: {link}")
                             if _forward_media_group(client, source_channel_id, target_id, media_group_msgs):
                                 forwarded += 1
                                 total = msg.get("total", 0)
@@ -867,6 +896,8 @@ def forward_messages_batch(
                             print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
                     else:
                         # 普通消息，使用 copy_message
+                        # 上传阶段提示
+                        print(f"[UPLOAD] 上传中: {link}")
                         client.copy_message(
                             chat_id=target_id,
                             from_chat_id=source_channel_id,
@@ -902,6 +933,8 @@ def forward_messages_batch(
                                     media_group_msgs = _get_media_group_messages(
                                         client, source_channel_id, original_msg.media_group_id, msg_id
                                     )
+                                    print(f"[DOWNLOAD] 下载完成: {link} ({len(media_group_msgs)} 条)")
+                                    print(f"[UPLOAD] 上传中: {link} (媒体组 {len(media_group_msgs)} 条)")
                                     if media_group_msgs and _force_send_media_group(client, target_id, media_group_msgs):
                                         forwarded += 1
                                         total = msg.get("total", 0)
