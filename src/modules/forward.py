@@ -86,17 +86,18 @@ def summarize_messages_for_forward(
     conn: sqlite3.Connection,
     messages: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """统计待转发消息的累计大小和条数
+    """统计待转发消息的累计大小和条数，同时填充每条消息的 file_size
 
     Returns:
         {
             "total_count": int,
             "media_count": int,
             "total_size_mb": float,
+            "file_sizes": dict[int, int],  # message_id -> file_size
         }
     """
     if not messages:
-        return {"total_count": 0, "media_count": 0, "total_size_mb": 0.0}
+        return {"total_count": 0, "media_count": 0, "total_size_mb": 0.0, "file_sizes": {}}
 
     msg_ids = [m["message_id"] for m in messages]
 
@@ -105,24 +106,28 @@ def summarize_messages_for_forward(
     cursor.execute(
         f"""
         SELECT
-            COUNT(*) as total_count,
-            SUM(CASE WHEN file_size > 0 THEN 1 ELSE 0 END) as media_count,
-            COALESCE(SUM(file_size), 0) as total_size
+            message_id,
+            COALESCE(file_size, 0) as file_size
         FROM messages
         WHERE message_id IN ({placeholders})
         """,
         msg_ids,
     )
-    row = cursor.fetchone()
+    file_sizes = {row[0]: row[1] for row in cursor.fetchall()}
 
-    total_count = row[0] if row else 0
-    media_count = row[1] if row else 0
-    total_size_bytes = row[2] if row else 0
+    # 填充每条消息的 file_size
+    for msg in messages:
+        msg["file_size"] = file_sizes.get(msg["message_id"], 0)
+
+    total_count = len(msg_ids)
+    media_count = sum(1 for fs in file_sizes.values() if fs > 0)
+    total_size_bytes = sum(file_sizes.values())
 
     return {
         "total_count": total_count,
         "media_count": media_count,
         "total_size_mb": total_size_bytes / 1024 / 1024,
+        "file_sizes": file_sizes,
     }
 
 
