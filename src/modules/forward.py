@@ -161,6 +161,25 @@ def confirm_forward(
     print(f"  - 有媒体：{media_count} 条")
     print(f"  - 媒体累计大小：{total_size_mb:.1f} MB")
     print(f"  - 预估大小级别：{size_level}")
+
+    # 显示消息列表预览
+    print(f"\n[FORWARD] 待转发消息列表（共 {len(messages)} 条）：")
+    for i, msg in enumerate(messages[:20]):  # 限制显示20条
+        link = f"https://t.me/c/{abs(msg.get('source_id', 0))}/{msg['message_id']}"
+        total = msg.get("total", 0)
+        views = msg.get("views", 0)
+        file_size = msg.get("file_size", 0)
+        size_mb = file_size / 1024 / 1024 if file_size else 0
+        is_media_group = msg.get("is_media_group", False)
+
+        group_suffix = " (媒体组)" if is_media_group else ""
+        stats = _build_stats_str(total, views)
+        size_str = f"{size_mb:.1f}MB" if size_mb > 0 else "无媒体"
+        print(f"  {i+1}. {link} | {size_str}{group_suffix}{stats}")
+
+    if len(messages) > 20:
+        print(f"  ... 还有 {len(messages) - 20} 条消息")
+
     print()
 
     try:
@@ -1313,21 +1332,21 @@ def main():
                     cleanup_channel_temp_dbs(synced_channels)
                     return
 
-            print(f"[FORWARD] 处理 {len(channel_ids)} 个频道（递归深度 {recursion_depth}）...")
-            total_f, total_s, total_fa = forward_with_recursion(
-                channel_ids,
-                target_channel_id,
-                current_depth=1,
-                max_depth=recursion_depth,
-                check_exists=args.check,
-                force=args.force,
-                reaction_limit=args.limit,
-            )
-            print("\n[FORWARD] ========== 全部完成 ==========")
-            print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")
+                # 确认后直接转发已预取的消息，不重复同步/查询
+                print(f"[FORWARD] 开始转发（使用已确认的消息）...")
+                total_f, total_s, total_fa = 0, 0, 0
+                for ch_id in synced_channels:
+                    if ch_id in channel_messages and channel_messages[ch_id]:
+                        f, s, fa = forward_messages_batch(ch_id, [target_channel_id], channel_messages[ch_id], args.check, args.force)
+                        total_f += f
+                        total_s += s
+                        total_fa += fa
+                        print(f"[FORWARD] 频道 {ch_id} 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")
 
-            # 清理临时数据库
-            cleanup_channel_temp_dbs(channel_ids)
+                print("\n[FORWARD] ========== 全部完成 ==========")
+                print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")
+                cleanup_channel_temp_dbs(synced_channels)
+                return
 
 
 # 向后兼容别名

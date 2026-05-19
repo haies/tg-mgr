@@ -80,6 +80,21 @@ class TestConfirmForward:
             result = confirm_forward([], {"total_count": 0})
         assert result is False
 
+    def test_confirm_forward_shows_message_list(self):
+        """确认前应该显示消息列表"""
+        from modules.forward import confirm_forward
+
+        messages = [
+            {"message_id": 123, "source_id": -1001234567890, "file_size": 1024*1024*10, "total": 5, "views": 1000},
+            {"message_id": 456, "source_id": -1001234567890, "file_size": 0, "total": 0, "views": 500},
+        ]
+        summary = {"total_count": 2, "media_count": 1, "total_size_mb": 10.0}
+
+        # 模拟输入 'n' 取消
+        with patch("builtins.input", return_value="n"):
+            result = confirm_forward(messages, summary)
+            assert result is False
+
 
 class TestFindHighReactionMessages:
     """测试 find_high_reaction_messages 函数"""
