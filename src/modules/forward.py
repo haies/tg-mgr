@@ -312,13 +312,18 @@ def find_messages_to_forward(
             seen_ids.add(msg["message_id"])
             merged.append(msg)
 
-    # 补充 reaction 消息的 views 字段（从 view_results 中获取，仅当 views > 0）
-    view_map = {row[0]: row[1] for row in view_rows}
+    # 补充 reaction 消息的 views 和 source_id 字段（从 view_results 中获取，仅当 views > 0）
+    view_map = {row[0]: row[1] for row in view_rows}  # message_id -> views
+    source_id_map = {row[0]: row[2] for row in view_rows}  # message_id -> source_id
     for msg in merged:
         if "views" not in msg:
             views = view_map.get(msg["message_id"], 0)
             if views > 0:
                 msg["views"] = views
+        if "source_id" not in msg:
+            source_id = source_id_map.get(msg["message_id"])
+            if source_id:
+                msg["source_id"] = source_id
 
     return merged
 
