@@ -20,7 +20,6 @@ import re
 import sqlite3
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
 from pyrogram import Client, errors
@@ -34,7 +33,7 @@ from pyrogram.types import (
     Message,
 )
 
-from database import get_database_dir, get_db
+from database import get_db
 from database.query import (
     VIEWS_THRESHOLD_MULTIPLIER,
     find_top_messages,
@@ -304,41 +303,10 @@ def extract_source_channels(messages: list[dict[str, Any]]) -> list[int]:
     return list(source_channels)
 
 
-def get_channel_temp_db_path(channel_id: int) -> Path:
-    """获取频道专属的临时数据库路径（不会被后续同步覆盖）"""
-    db_dir = get_database_dir()
-    return db_dir / f"messages_{abs(channel_id)}.tmp.db"
-
-
-def cleanup_channel_temp_dbs(channel_ids: list[int]) -> None:
-    """清理频道专属临时数据库"""
-    for ch_id in channel_ids:
-        temp_path = get_channel_temp_db_path(ch_id)
-        if temp_path.exists():
-            try:
-                temp_path.unlink()
-            except Exception:
-                pass
-
-
-def sync_channel_for_forward(channel_id: int, temp_db_path: Path | None = None) -> None:
-    """为转发同步频道数据（使用临时数据库）
-
-    Args:
-        channel_id: 频道ID
-        temp_db_path: 可选的临时数据库路径（用于per-channel模式）
-    """
+def sync_channel_for_forward(channel_id: int) -> None:
+    """为转发同步频道数据（使用主数据库）"""
     from modules.sync import sync_channel
-
-    if temp_db_path is None:
-        temp_db_path = get_channel_temp_db_path(channel_id)
-
-    try:
-        sync_channel(channel_id=str(channel_id), db_path=str(temp_db_path))
-    finally:
-        pass  # sync_channel handles env cleanup internally
-
-    # 注意：不移动到主数据库，保持temp DB独立直到cleanup
+    sync_channel(channel_id=str(channel_id))
 
 
 def forward_single_message(
@@ -1096,55 +1064,52 @@ def forward_with_recursion(
             print(f"[FORWARD] 深度 {current_depth}: 同步频道 {channel_id} 失败: {e}")
             continue
 
-        # 连接频道专属的临时数据库（不是主数据库）
-        temp_db_path = get_channel_temp_db_path(channel_id)
-        conn = sqlite3.connect(str(temp_db_path))
+        # 使用主数据库查询（与 info 保持一致）
+        with get_db() as conn:
+            # 获取平均浏览量用于计算阈值（与 query.find_messages_by_views_top 保持一致）
+            avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
+            avg_views = avg_row[0] if avg_row and isinstance(avg_row[0], (int, float)) else 0
+            threshold = avg_views * VIEWS_THRESHOLD_MULTIPLIER if avg_views > 0 else 0
 
-        # 获取平均浏览量用于计算阈值（与 query.find_messages_by_views_top 保持一致）
-        avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
-        avg_views = avg_row[0] if avg_row and isinstance(avg_row[0], (int, float)) else 0
-        threshold = avg_views * VIEWS_THRESHOLD_MULTIPLIER if avg_views > 0 else 0
+            # 查找要转发的消息（第1层不按source_id过滤，与info一致；递归层按source_id过滤）
+            filter_by_source = current_depth > 1
+            messages = find_messages_to_forward(conn, channel_id, reaction_limit, views_limit, filter_by_source=filter_by_source)
+            # 统计高反应和高浏览量消息数量
+            high_reaction_count = sum(1 for m in messages if m.get("total", 0) > 0)
+            high_views_count = sum(1 for m in messages if m.get("views", 0) > threshold)
+            print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
 
-        # 查找要转发的消息（第1层不按source_id过滤，与info一致；递归层按source_id过滤）
-        filter_by_source = current_depth > 1
-        messages = find_messages_to_forward(conn, channel_id, reaction_limit, views_limit, filter_by_source=filter_by_source)
-        # 统计高反应和高浏览量消息数量
-        high_reaction_count = sum(1 for m in messages if m.get("total", 0) > 0)
-        high_views_count = sum(1 for m in messages if m.get("views", 0) > threshold)
-        print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
+            if messages:
+                # 转发到目标
+                f, s, fa = forward_messages_batch(channel_id, [target_channel], messages, check_exists, force)
+                total_forwarded += f
+                total_skipped += s
+                total_failed += fa
 
-        if messages:
-            # 转发到目标
-            f, s, fa = forward_messages_batch(channel_id, [target_channel], messages, check_exists, force)
-            total_forwarded += f
-            total_skipped += s
-            total_failed += fa
+                # 递归处理下一层（使用与 info.py 一致的 forward_limit 获取来源频道）
+                if current_depth < max_depth:
+                    next_channels = get_forward_sources(conn, limit=forward_limit)
+                    if next_channels:
+                        source_channel_ids = [ch[0] for ch in next_channels]
+                        print(f"[FORWARD] 深度 {current_depth}: 发现来源频道 {len(source_channel_ids)} 个")
+                        nf, ns, nfa = forward_with_recursion(
+                            source_channel_ids,
+                            target_channel,
+                            current_depth + 1,
+                            max_depth,
+                            processed_channels,
+                            check_exists,
+                            force,
+                            reaction_limit,
+                            views_limit,
+                            forward_limit,
+                        )
+                        total_forwarded += nf
+                        total_skipped += ns
+                        total_failed += nfa
+                    else:
+                        print(f"[FORWARD] 深度 {current_depth}: 未找到来源频道，停止递归")
 
-            # 递归处理下一层（使用与 info.py 一致的 forward_limit 获取来源频道）
-            if current_depth < max_depth:
-                next_channels = get_forward_sources(conn, limit=forward_limit)
-                if next_channels:
-                    source_channel_ids = [ch[0] for ch in next_channels]
-                    print(f"[FORWARD] 深度 {current_depth}: 发现来源频道 {len(source_channel_ids)} 个")
-                    nf, ns, nfa = forward_with_recursion(
-                        source_channel_ids,
-                        target_channel,
-                        current_depth + 1,
-                        max_depth,
-                        processed_channels,
-                        check_exists,
-                        force,
-                        reaction_limit,
-                        views_limit,
-                        forward_limit,
-                    )
-                    total_forwarded += nf
-                    total_skipped += ns
-                    total_failed += nfa
-                else:
-                    print(f"[FORWARD] 深度 {current_depth}: 未找到来源频道，停止递归")
-
-        conn.close()
         processed_channels.add(channel_id)
 
     return total_forwarded, total_skipped, total_failed
@@ -1366,7 +1331,6 @@ def main():
                         summary = summarize_messages_for_forward(conn, messages)
                         if not confirm_forward(messages, summary):
                             print("[FORWARD] 已取消")
-                            cleanup_channel_temp_dbs([channel_id])
                             return
 
                     if messages:
@@ -1385,72 +1349,41 @@ def main():
         else:
             # 递归转发
             if args.force:
-                # 同步所有频道到各自的临时数据库
-                synced_channels = []
-                channel_messages: dict[int, list] = {}
+                # 同步所有频道到主数据库并获取消息
+                all_messages = []
                 for ch_id in channel_ids:
                     try:
                         sync_channel_for_forward(ch_id)
-                        synced_channels.append(ch_id)
-                        # 从频道专属temp DB获取消息
-                        temp_db_path = get_channel_temp_db_path(ch_id)
-                        temp_conn = sqlite3.connect(str(temp_db_path))
-                        msgs = find_messages_to_forward(temp_conn, ch_id, reaction_limit, views_limit, filter_by_source=False)
-                        if msgs:
-                            channel_messages[ch_id] = msgs
-                        temp_conn.close()
                     except Exception as e:
                         print(f"[FORWARD] 同步频道 {ch_id} 失败: {e}")
                         continue
 
-                if not synced_channels:
-                    print("[FORWARD] 所有频道同步失败")
-                    return
-
-                # 计算每个频道的统计信息
-                channel_summaries: dict[int, dict] = {}
-                all_messages = []
-                for ch_id in synced_channels:
-                    if ch_id in channel_messages:
-                        temp_db_path = get_channel_temp_db_path(ch_id)
-                        temp_conn = sqlite3.connect(str(temp_db_path))
-                        summary = summarize_messages_for_forward(temp_conn, channel_messages[ch_id])
-                        temp_conn.close()
-                        channel_summaries[ch_id] = summary
-                        all_messages.extend(channel_messages[ch_id])
+                    with get_db() as conn:
+                        msgs = find_messages_to_forward(conn, ch_id, reaction_limit, views_limit, filter_by_source=False)
+                        if msgs:
+                            all_messages.extend(msgs)
 
                 if not all_messages:
                     print("[FORWARD] 所有频道无可转发消息")
-                    cleanup_channel_temp_dbs(synced_channels)
                     return
 
-                # 显示每个频道的统计信息
-                print(f"[FORWARD] 待转发消息统计（{len(synced_channels)} 个频道）：")
-                total_count = 0
-                total_media_count = 0
-                total_size_mb = 0.0
-                for ch_id in synced_channels:
-                    if ch_id in channel_summaries:
-                        s = channel_summaries[ch_id]
-                        total_count += s["total_count"]
-                        total_media_count += s["media_count"]
-                        total_size_mb += s["total_size_mb"]
-                        print(f"  频道 {ch_id}: {s['total_count']} 条消息, {s['media_count']} 条有媒体, {s['total_size_mb']:.1f} MB")
-                print(f"  合计: {total_count} 条消息, {total_media_count} 条有媒体, {total_size_mb:.1f} MB")
+                # 显示统计信息
+                summary = summarize_messages_for_forward(get_db(), all_messages)
+                print(f"[FORWARD] 待转发消息统计（{len(channel_ids)} 个频道）：")
+                print(f"  合计: {summary['total_count']} 条消息, {summary['media_count']} 条有媒体, {summary['total_size_mb']:.1f} MB")
                 print()
 
-                summary = {"total_count": total_count, "media_count": total_media_count, "total_size_mb": total_size_mb}
                 if not confirm_forward(all_messages, summary):
                     print("[FORWARD] 已取消")
-                    cleanup_channel_temp_dbs(synced_channels)
                     return
 
-                # 确认后直接转发已预取的消息，不重复同步/查询
-                print("[FORWARD] 开始转发（使用已确认的消息）...")
+                # 确认后转发
+                print("[FORWARD] 开始转发...")
                 total_f, total_s, total_fa = 0, 0, 0
-                for ch_id in synced_channels:
-                    if ch_id in channel_messages and channel_messages[ch_id]:
-                        f, s, fa = forward_messages_batch(ch_id, [target_channel_id], channel_messages[ch_id], args.check, args.force)
+                for ch_id in channel_ids:
+                    ch_msgs = [m for m in all_messages if m.get('source_id') == ch_id]
+                    if ch_msgs:
+                        f, s, fa = forward_messages_batch(ch_id, [target_channel_id], ch_msgs, args.check, args.force)
                         total_f += f
                         total_s += s
                         total_fa += fa
@@ -1458,7 +1391,6 @@ def main():
 
                 print("\n[FORWARD] ========== 全部完成 ==========")
                 print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")
-                cleanup_channel_temp_dbs(synced_channels)
                 return
             else:
                 # 非 force 模式：直接调用递归转发
