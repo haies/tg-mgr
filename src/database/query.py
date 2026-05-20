@@ -18,6 +18,7 @@ WITH reaction_messages AS (
     SELECT
         message_id,
         source_id,
+        views,
         json_extract(reactions, '$.positive') AS positive,
         json_extract(reactions, '$.heart') AS heart,
         COALESCE(json_extract(reactions, '$.total'), json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
@@ -44,10 +45,15 @@ def find_high_reaction_messages(
     cursor = conn.cursor()
     threshold = min_total if min_total > 0 else 0
     cursor.execute(
-        f"""
-        {_REACTION_CTE}
-        SELECT message_id, positive, heart, total FROM reaction_messages
-        WHERE total > ?
+        """
+        SELECT
+            message_id,
+            json_extract(reactions, '$.positive') AS positive,
+            json_extract(reactions, '$.heart') AS heart,
+            COALESCE(json_extract(reactions, '$.total'), json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) AS total
+        FROM messages
+        WHERE is_valid = 1 AND reactions IS NOT NULL
+          AND COALESCE(json_extract(reactions, '$.total'), json_extract(reactions, '$.positive') + json_extract(reactions, '$.heart')) > ?
         ORDER BY total DESC
         LIMIT ?
         """,
@@ -58,7 +64,7 @@ def find_high_reaction_messages(
 
 def find_reaction_messages_over_threshold(
     conn: sqlite3.Connection, threshold: int = 50, limit: int | None = None, source_id: int | None = None
-) -> list[tuple[int, int, int, int]]:
+) -> list[tuple[int, int, int, int, int | None, int | None]]:
     """
     查询超过阈值的高反应消息
 
@@ -71,7 +77,7 @@ def find_reaction_messages_over_threshold(
         source_id: 可选，按来源频道ID过滤
 
     Returns:
-        [(message_id, positive, heart, total), ...]
+        [(message_id, positive, heart, total, source_id, views), ...]
     """
     cursor = conn.cursor()
 
@@ -84,7 +90,7 @@ def find_reaction_messages_over_threshold(
             cursor.execute(
                 f"""
                 {_REACTION_CTE}
-                SELECT message_id, positive, heart, total FROM reaction_messages
+                SELECT message_id, positive, heart, total, source_id, views FROM reaction_messages
                 WHERE total > ? AND source_id = ?
                 ORDER BY total DESC
                 LIMIT ?
@@ -95,7 +101,7 @@ def find_reaction_messages_over_threshold(
             cursor.execute(
                 f"""
                 {_REACTION_CTE}
-                SELECT message_id, positive, heart, total FROM reaction_messages
+                SELECT message_id, positive, heart, total, source_id, views FROM reaction_messages
                 WHERE total > ? AND source_id = ?
                 ORDER BY total DESC
                 """,
@@ -106,7 +112,7 @@ def find_reaction_messages_over_threshold(
             cursor.execute(
                 f"""
                 {_REACTION_CTE}
-                SELECT message_id, positive, heart, total FROM reaction_messages
+                SELECT message_id, positive, heart, total, source_id, views FROM reaction_messages
                 WHERE total > ?
                 ORDER BY total DESC
                 LIMIT ?
@@ -117,7 +123,7 @@ def find_reaction_messages_over_threshold(
             cursor.execute(
                 f"""
                 {_REACTION_CTE}
-                SELECT message_id, positive, heart, total FROM reaction_messages
+                SELECT message_id, positive, heart, total, source_id, views FROM reaction_messages
                 WHERE total > ?
                 ORDER BY total DESC
                 """,
@@ -206,19 +212,25 @@ def find_messages_by_views(conn: sqlite3.Connection, min_views: int = 1, limit: 
     return cursor.fetchall()
 
 
-def find_messages_by_views_top(conn: sqlite3.Connection, limit: int = 10, source_id: int | None = None) -> list[tuple[int, int, int, int]]:
+def find_messages_by_views_top(conn: sqlite3.Connection, limit: int = 50, source_id: int | None = None) -> list[tuple[int, int, int, int]]:
     """
-    按浏览量TOP查询（显示高于平均2倍的消息，数量不足时补充普通高浏览量消息）
+    按浏览量TOP查询（显示高于平均8倍的消息）
+
+    规则：
+    - 默认：views > 8 * avg_views，最多返回 limit 条（上限 50）
+    - 若结果 < 10 条，回退到浏览量 top 10（views > 1）
+    - 浏览量必须 > 1
 
     Args:
         conn: 数据库连接
-        limit: 返回条数上限
+        limit: 返回条数上限（默认 50）
         source_id: 可选，按来源频道ID过滤
 
     Returns:
         [(message_id, views, source_id, media_type), ...]
     """
     cursor = conn.cursor()
+    actual_limit = min(limit, 50)
 
     # 计算平均浏览量（仅 views > 0 的消息）
     if source_id is not None:
@@ -229,34 +241,38 @@ def find_messages_by_views_top(conn: sqlite3.Connection, limit: int = 10, source
     avg_views = row[0] if row and row[0] else 0
 
     if avg_views <= 0:
-        # 没有足够的浏览量数据，回退到取最高浏览量消息
+        # 没有足够的浏览量数据，回退到取最高浏览量消息（views > 1）
         if source_id is not None:
             cursor.execute(
                 """
                 SELECT message_id, views, source_id, media_type
                 FROM messages
-                WHERE is_valid = 1 AND views > 0 AND source_id = ?
+                WHERE is_valid = 1 AND views > 1 AND source_id = ?
                 ORDER BY views DESC
                 LIMIT ?
                 """,
-                (source_id, limit),
+                (source_id, actual_limit),
             )
         else:
             cursor.execute(
                 """
                 SELECT message_id, views, source_id, media_type
                 FROM messages
-                WHERE is_valid = 1 AND views > 0
+                WHERE is_valid = 1 AND views > 1
                 ORDER BY views DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (actual_limit,),
             )
-        return cursor.fetchall()
+        results = cursor.fetchall()
+        if len(results) < 10:
+            # 回退到 top 10
+            return _top_views_fallback(cursor, source_id, 10)
+        return results
 
-    threshold = avg_views * 8
+    threshold = avg_views * VIEWS_THRESHOLD_MULTIPLIER
 
-    # 先筛选 views > 2 * avg_views 的消息
+    # 筛选 views > 8 * avg_views 的消息
     if source_id is not None:
         cursor.execute(
             """
@@ -277,35 +293,44 @@ def find_messages_by_views_top(conn: sqlite3.Connection, limit: int = 10, source
             """,
             (threshold,),
         )
-    high_views_results = list(cursor.fetchall())
+    results = list(cursor.fetchall())
 
-    # 如果数量不足 limit，补充其他消息（views > 0 但 <= 2*avg）
-    if len(high_views_results) < limit:
-        if source_id is not None:
-            cursor.execute(
-                """
-                SELECT message_id, views, source_id, media_type
-                FROM messages
-                WHERE is_valid = 1 AND views > 0 AND views <= ? AND source_id = ?
-                ORDER BY views DESC
-                LIMIT ?
-                """,
-                (threshold, source_id, limit - len(high_views_results)),
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT message_id, views, source_id, media_type
-                FROM messages
-                WHERE is_valid = 1 AND views > 0 AND views <= ?
-                ORDER BY views DESC
-                LIMIT ?
-                """,
-                (threshold, limit - len(high_views_results)),
-            )
-        high_views_results.extend(cursor.fetchall())
+    # 如果数量不足 10，回退到 top 10（views > 1）
+    if len(results) < 10:
+        return _top_views_fallback(cursor, source_id, 10)
 
-    return high_views_results
+    return results[:actual_limit]
+
+
+def _top_views_fallback(cursor: sqlite3.Cursor, source_id: int | None, limit: int) -> list[tuple[int, int, int, int]]:
+    """回退查询：浏览量 top N（views > 1）"""
+    if source_id is not None:
+        cursor.execute(
+            """
+            SELECT message_id, views, source_id, media_type
+            FROM messages
+            WHERE is_valid = 1 AND views > 1 AND source_id = ?
+            ORDER BY views DESC
+            LIMIT ?
+            """,
+            (source_id, limit),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT message_id, views, source_id, media_type
+            FROM messages
+            WHERE is_valid = 1 AND views > 1
+            ORDER BY views DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    return cursor.fetchall()
+
+
+# 高浏览量阈值倍数（统一常量，供 find_top_messages 和 find_messages_by_views_top 共用）
+VIEWS_THRESHOLD_MULTIPLIER = 8
 
 
 def find_reaction_messages_for_display(
@@ -332,7 +357,6 @@ def find_reaction_messages_for_display(
     from utils.media import row_to_reaction_dict
 
     # source_id 过滤条件
-    source_filter = f"AND source_id = {source_id}" if source_id else ""
 
     # 获取高反应消息
     over50_results = find_reaction_messages_over_threshold(conn, threshold=50, limit=50, source_id=source_id)
@@ -358,3 +382,72 @@ def find_reaction_messages_for_display(
         }
         for row in view_results
     ]
+
+
+def find_top_messages(
+    conn: sqlite3.Connection,
+    reaction_limit: int = 10,
+    views_limit: int = 50,
+    source_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    统一的高反应+高浏览TOP查询（info.py 和 forward.py 共用）
+
+    逻辑：
+    1. 高反应消息 TOP（reactions > 0）
+    2. 高浏览量消息 TOP（views > 8 * avg_views，views > 1）
+    3. 合并去重，reaction 优先
+    4. 补充缺失字段（views, source_id, media_type）
+    5. 标记 msg_type（high_reaction / high_views）
+
+    Args:
+        conn: 数据库连接
+        reaction_limit: 高反应消息数量限制
+        views_limit: 高浏览量消息数量限制
+        source_id: 可选，按来源频道ID过滤
+
+    Returns:
+        消息列表，每条消息包含 message_id, positive, heart, total, views, source_id, media_type, msg_type
+    """
+
+    # 1. 高反应消息
+    reaction_results = find_reaction_messages_for_display(conn, reaction_limit=reaction_limit, source_id=source_id)
+    for msg in reaction_results:
+        msg["msg_type"] = "high_reaction"
+
+    # 2. 高浏览量消息（views > 8 * avg_views）
+    view_rows = find_messages_by_views_top(conn, limit=views_limit, source_id=source_id)
+    view_results = [
+        {
+            "message_id": row[0],
+            "views": row[1],
+            "source_id": row[2],
+            "media_type": row[3],
+            "msg_type": "high_views",
+        }
+        for row in view_rows
+    ]
+
+    # 3. 合并去重（按 message_id，reaction 优先）
+    seen_ids = set()
+    merged = []
+    for msg in reaction_results:
+        seen_ids.add(msg["message_id"])
+        merged.append(msg)
+    for msg in view_results:
+        if msg["message_id"] not in seen_ids:
+            seen_ids.add(msg["message_id"])
+            merged.append(msg)
+
+    # 4. 补充 reaction 消息的 views 和 source_id 字段（从 view_results 获取，仅当 views > 0）
+    view_map = {row[0]: row[1] for row in view_rows}  # message_id -> views
+    source_id_map = {row[0]: row[2] for row in view_rows}  # message_id -> source_id
+    for msg in merged:
+        if "views" not in msg:
+            views = view_map.get(msg["message_id"], 0)
+            if views > 0:
+                msg["views"] = views
+        if "source_id" not in msg:
+            msg["source_id"] = source_id_map.get(msg["message_id"]) or source_id
+
+    return merged

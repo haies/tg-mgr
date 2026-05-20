@@ -3,10 +3,9 @@ from typing import Any
 
 from pyrogram import errors
 
-from database import get_db, get_database_path
+from database import get_db
 from database.query import (
-    find_messages_by_views_top,
-    find_reaction_messages_for_display,
+    find_top_messages,
     get_forward_sources,
 )
 from utils.telegram_client import get_client, get_config
@@ -31,15 +30,18 @@ def list_all_dialogs() -> list[dict[str, Any]]:
         return dialogs
 
 
-def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[str, Any]:
+def analyze_channel(channel_id: int, reaction_limit: int | None = None, views_limit: int | None = None) -> dict[str, Any]:
     """分析指定频道数据"""
     config = get_config()
     forward_limit = config.get("forward_limit", 10)
     reaction_limit = (
         reaction_limit if reaction_limit is not None else config.get("reaction_limit", 10)
     )
+    views_limit = (
+        views_limit if views_limit is not None else config.get("views_limit", 50)
+    )
 
-    from modules.sync import sync_channel, force_reset_database
+    from modules.sync import sync_channel
 
     sync_channel(channel_id=str(channel_id))
 
@@ -101,12 +103,12 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
             if source["name"] is None:
                 source["name"] = channel_cache.get(source["id"], "无名")
 
-        # 获取高反应消息（使用统一的查询逻辑）
-        reactions = find_reaction_messages_for_display(conn, reaction_limit=reaction_limit)
+        # 统一查询高反应+高浏览量TOP消息
+        all_top_messages = find_top_messages(conn, reaction_limit=reaction_limit, views_limit=views_limit)
 
-        # 获取高浏览量消息（views > 2 * avg_views，数量不足时补充到 limit）
-        view_results = find_messages_by_views_top(conn, limit=reaction_limit)
-        top_views = [{"message_id": row[0], "views": row[1]} for row in view_results]
+        # 分离高反应和高浏览量消息（保持原有分开展示逻辑）
+        reactions = [msg for msg in all_top_messages if msg.get("msg_type") == "high_reaction"]
+        top_views = [{"message_id": msg["message_id"], "views": msg.get("views", 0)} for msg in all_top_messages if msg.get("msg_type") == "high_views"]
 
     return {"forward_sources": forward_sources, "reactions": reactions, "top_views": top_views}
 
@@ -114,6 +116,8 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None) -> dict[
 def main():
     """主执行流程"""
     import argparse
+
+    from modules.sync import force_reset_database
 
     parser = argparse.ArgumentParser(description="Telegram 频道信息分析工具")
     parser.add_argument(
@@ -123,6 +127,7 @@ def main():
         "-f", "--force", action="store_true", help="强制重置数据库并重新同步（获取所有历史消息）"
     )
     parser.add_argument("reaction_limit", nargs="?", type=int, help="高反应消息数量限制（可选）")
+    parser.add_argument("-v", "--views-limit", type=int, dest="views_limit", help="高浏览量消息数量限制（可选）")
 
     args = parser.parse_args()
 
@@ -136,17 +141,17 @@ def main():
         if args.force:
             force_reset_database()
 
-        result = analyze_channel(args.channel_id, reaction_limit=args.reaction_limit)
-        print("\n转发来源TOP:")
+        result = analyze_channel(args.channel_id, reaction_limit=args.reaction_limit, views_limit=args.views_limit)
+        print(f"\n转发来源TOP ({len(result['forward_sources'])}):")
         for item in result["forward_sources"]:
             print(f"{item['name']}\t{item['id']}\t{item['address']}\t{item['count']}")
 
-        print("\n浏览量TOP:")
+        print(f"\n浏览量TOP ({len(result['top_views'])}):")
         for item in result["top_views"]:
             message_address = f"{get_channel_address(args.channel_id)}/{item['message_id']}"
             print(f"{item['views']}\t{message_address}")
 
-        print("\n高反应消息TOP:")
+        print(f"\n高反应消息TOP ({len(result['reactions'])}):")
         for item in result["reactions"]:
             message_address = f"{get_channel_address(args.channel_id)}/{item['message_id']}"
             print(f"总计: {item['total']}\t{message_address}")

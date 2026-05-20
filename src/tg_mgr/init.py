@@ -32,7 +32,7 @@ def run_init():
 
     if not config_file.exists():
         with open(config_file, "w") as f:
-            f.write('{\n  "forward_limit": 10,\n  "reaction_limit": 10\n}\n')
+            f.write('{\n  "forward_limit": 10,\n  "reaction_limit": 10,\n  "views_limit": 50\n}\n')
 
     print(f"\nConfig created at {config_dir}")
     print("Edit .env to add your API credentials, then run 'tg clean' to start.")

@@ -188,12 +188,19 @@ def row_to_reaction_dict(row: tuple) -> dict[str, Any]:
     将数据库查询结果行转换为反应数据字典
 
     Args:
-        row: (message_id, positive, heart, total) 元组
+        row: (message_id, positive, heart, total, source_id, views) 元组
 
     Returns:
-        包含 positive, heart, total 的字典
+        包含 positive, heart, total, source_id, views 的字典
     """
-    positive = row[1] if row[1] is not None else 0
-    heart = row[2] if row[2] is not None else 0
+    positive = row[1] if len(row) > 1 and row[1] is not None else 0
+    heart = row[2] if len(row) > 2 and row[2] is not None else 0
     total = row[3] if len(row) > 3 else positive + heart
-    return {"message_id": row[0], "positive": positive, "heart": heart, "total": total}
+    source_id = row[4] if len(row) > 4 else None
+    views = row[5] if len(row) > 5 else None
+    result = {"message_id": row[0], "positive": positive, "heart": heart, "total": total}
+    if source_id is not None:
+        result["source_id"] = source_id
+    if views is not None and views > 0:
+        result["views"] = views
+    return result

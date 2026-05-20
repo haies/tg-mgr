@@ -1,6 +1,7 @@
 {
   "forward_limit": 10,
   "reaction_limit": 10,
+  "views_limit": 50,
   "download_dir": "~/Downloads/Telegram",
   "max_retries": 5,
   "retry_delay_base": 1,

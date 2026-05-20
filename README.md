@@ -57,6 +57,7 @@ Get API credentials from https://my.telegram.org
 |--------|---------|-------------|
 | `forward_limit` | 10 | Top N forward sources |
 | `reaction_limit` | 10 | Top N high-reaction messages |
+| `views_limit` | 50 | Top N high-views messages (views > 8x avg) |
 | `download_dir` | ~/Downloads/Telegram | Media download directory |
 | `max_retries` | 5 | API max retries |
 | `media_types` | all types | Supported media types |
@@ -116,30 +117,71 @@ tg info                          # List all channels
 tg info -1001234567890           # Analyze specific channel
 tg info -1001234567890 20        # Top 20 high-reaction messages
 tg info -1001234567890 -f        # Force reset database and re-sync
+tg info -1001234567890 20 -v 50  # Custom limits: reaction=20, views=50
 ```
 
 **Analysis Output:**
 - Forward sources (where messages are forwarded from)
-- Top views (messages with views > 8x average, supplemented to limit)
-- High-reaction messages (likes + hearts)
+- Top views (messages with views > 8x average, max 50 by default)
+- High-reaction messages (likes + hearts, max 10 by default)
+
+**Parameters:**
+- `reaction_limit` positional arg: high-reaction message count limit
+- `-v, --views-limit`: high-views message count limit (overrides config)
 
 ### forward - Message Forwarding
 
 ```bash
-tg forward -1001234567890                       # To default target
-tg forward -1001234567890 -o -100555666777     # Specify target
-tg forward -1001234567890 -c                   # Check mode
-tg forward https://t.me/username/123            # Via username link
-tg forward -1001234567890 -r 3                  # Recursive depth 3
-tg forward -1001234567890 -f                    # Force mode (bypass restrictions)
+# Basic forwarding
+tg forward -1001234567890 -o -100555666777              # Single channel to target
+tg forward -1001234567890 -1009876543210 -o -100555666777  # Multiple sources
+
+# Recursive forwarding (-r 0 disables recursion)
+tg forward -1001234567890 -o -100555666777 -r 3       # Depth 3, discovers source channels
+
+# Force mode (bypass restrictions via download/re-upload)
+tg forward -1001234567890 -o -100555666777 -f          # Shows preview first, then forwards
+
+# Custom limits (override config.json defaults)
+tg forward -1001234567890 -o -100555666777 -l 20 -v 100  # reaction=20, views=100
+
+# Check before forward (skip existing messages)
+tg forward -1001234567890 -o -100555666777 -c
+
+# Combine all options
+tg forward -1001234567890 -o -100555666777 -r 3 -f -c -l 20 -v 100
+
+# Direct message link forwarding (single message, no recursion)
+tg forward https://t.me/c/1234567890/100 -o -100555666777
+tg forward https://t.me/c/1234567890/100 -o -100555666777 -f
 ```
 
+**Parameters:**
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-o, --target` | Target channel ID | From config.json |
+| `-c, --check` | Check if message exists before forwarding | False |
+| `-r, --depth` | Recursion depth (0=disabled) | 5 |
+| `-f, --force` | Force forward (download & re-upload) | False |
+| `-l, --limit` | High-reaction message limit | From config (10) |
+| `-v, --views-limit` | High-views message limit | From config (50) |
+
 **Features:**
-- High-reaction message filtering (likes + hearts threshold)
+- High-reaction message filtering (likes + hearts)
+- High-views message filtering (views > 8x average)
 - Media group support (bidirectional search for complete groups)
-- Recursive depth forwarding with message link preservation (-r)
-- Force mode for restricted channels (-f, downloads and re-uploads content)
-- Direct message link forwarding (preserves original message)
+- Recursive depth forwarding (-r discovers source channels at each level)
+- Force mode (-f downloads content and re-uploads to bypass restrictions)
+- Direct message link forwarding (single message, no recursion)
+
+**Force Mode Flow:**
+1. Shows preview with message count, media size, and message list
+2. User confirms with 'y'
+3. Downloads media to temp directory
+4. Re-uploads to target channel
+5. Cleans up temp files
+
+**Config Precedence:** CLI argument > config.json > hard-coded default
 
 ### init - Interactive Setup
 
