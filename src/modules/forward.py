@@ -36,6 +36,7 @@ from pyrogram.types import (
 from database import get_db
 from database.query import (
     VIEWS_THRESHOLD_MULTIPLIER,
+    find_forward_sources_by_channel,
     find_top_messages,
     get_forward_sources,
 )
@@ -1088,7 +1089,7 @@ def forward_with_recursion(
 
                 # 递归处理下一层（使用与 info.py 一致的 forward_limit 获取来源频道）
                 if current_depth < max_depth:
-                    next_channels = get_forward_sources(conn, limit=forward_limit)
+                    next_channels = find_forward_sources_by_channel(conn, channel_id, limit=forward_limit)
                     if next_channels:
                         source_channel_ids = [ch[0] for ch in next_channels]
                         print(f"[FORWARD] 深度 {current_depth}: 发现来源频道 {len(source_channel_ids)} 个")
