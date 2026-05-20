@@ -451,3 +451,34 @@ def find_top_messages(
             msg["source_id"] = source_id_map.get(msg["message_id"]) or source_id
 
     return merged
+
+
+def find_forward_sources_by_channel(
+    conn: sqlite3.Connection,
+    channel_id: int,
+    limit: int = 10
+) -> list[tuple[int, int]]:
+    """
+    查询指定频道的转发来源统计
+
+    Args:
+        conn: 数据库连接
+        channel_id: 频道ID（作为 source_id 过滤）
+        limit: 返回条数上限
+
+    Returns:
+        [(source_id, count), ...]
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT source_id, COUNT(*) as count
+        FROM messages
+        WHERE is_valid = 1 AND source_id IS NOT NULL AND source_id = ?
+        GROUP BY source_id
+        ORDER BY count DESC
+        LIMIT ?
+        """,
+        (channel_id, limit),
+    )
+    return cursor.fetchall()
