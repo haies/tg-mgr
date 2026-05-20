@@ -174,15 +174,15 @@ class TestForceConfirmationNonRecursive:
         from modules.forward import main as forward_main
 
         # Mock the dependencies (sync_channel from modules.sync, get_db from database)
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel') as mock_sync, \
-             patch('modules.forward.get_db') as mock_get_db, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_messages_batch') as mock_forward, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
+             patch('modules.forward.forward_core.sync_channel'), \
+             patch('modules.forward.forward_core.get_db') as mock_get_db, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             # Setup mocks
             mock_client = MagicMock()
@@ -242,13 +242,13 @@ class TestForceConfirmationNonRecursive:
 
         from modules.forward import main as forward_main
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel_for_forward'), \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_messages_batch') as mock_forward, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
+             patch('modules.forward.recursive.sync_channel_for_forward'), \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -271,15 +271,15 @@ class TestForceConfirmationNonRecursive:
 
         from modules.forward import main as forward_main
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel') as mock_sync, \
-             patch('modules.forward.get_db') as mock_get_db, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_messages_batch') as mock_forward, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
+             patch('modules.forward.forward_core.sync_channel'), \
+             patch('modules.forward.forward_core.get_db') as mock_get_db, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -341,14 +341,14 @@ class TestForceConfirmationRecursive:
 
         from modules.forward import main as forward_main
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_messages_batch') as mock_forward_batch, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+             patch('modules.forward.recursive.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward_batch, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 10}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -378,14 +378,14 @@ class TestForceConfirmationRecursive:
 
         from modules.forward import main as forward_main
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_with_recursion') as mock_recursive, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+             patch('modules.forward.recursive.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.recursive.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 10}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -410,14 +410,14 @@ class TestForceConfirmationRecursive:
 
         from modules.forward import main as forward_main
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_with_recursion') as mock_recursive, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+             patch('modules.forward.recursive.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.recursive.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 10}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -445,14 +445,14 @@ class TestForceConfirmationRecursive:
 
         from modules.forward import main as forward_main
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel_for_forward') as mock_sync, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_with_recursion') as mock_recursive, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 10}):
+             patch('modules.forward.recursive.sync_channel_for_forward') as mock_sync, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.preview.confirm_forward') as mock_confirm, \
+             patch('modules.forward.recursive.forward_with_recursion') as mock_recursive, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 10}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -485,14 +485,14 @@ class TestForwardForceFlagConfirmation:
             return "y"
         monkeypatch.setattr("builtins.input", mock_input)
 
-        with patch('modules.forward.get_client') as mock_get_client, \
+        with patch('modules.forward.forward_core.get_client') as mock_get_client, \
              patch('modules.forward.is_channel_forwarding_allowed', return_value=True), \
-             patch('modules.forward.sync_channel') as mock_sync, \
-             patch('modules.forward.get_db') as mock_get_db, \
-             patch('modules.forward.find_messages_to_forward') as mock_find, \
-             patch('modules.forward.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.forward_messages_batch') as mock_forward, \
-             patch('modules.forward.get_config', return_value={"recursion_depth": 0}):
+             patch('modules.forward.forward_core.sync_channel'), \
+             patch('modules.forward.forward_core.get_db') as mock_get_db, \
+             patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
+             patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
+             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
             mock_get_client.return_value.__enter__ = MagicMock(return_value=mock_client)
