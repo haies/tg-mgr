@@ -8,7 +8,7 @@ from database.query import (
     find_top_messages,
     get_forward_sources,
 )
-from utils.telegram_client import get_client, get_config
+from utils.telegram_client import DEFAULT_CONFIG, get_client, get_config
 from utils.telegram_link import get_channel_address
 
 logger = logging.getLogger(__name__)
@@ -33,12 +33,13 @@ def list_all_dialogs() -> list[dict[str, Any]]:
 def analyze_channel(channel_id: int, reaction_limit: int | None = None, views_limit: int | None = None) -> dict[str, Any]:
     """分析指定频道数据"""
     config = get_config()
-    forward_limit = config.get("forward_limit", 10)
+    # max_source_channels 优先，兼容旧 forward_limit 配置名
+    max_source_channels = config.get("max_source_channels") or config.get("forward_limit") or DEFAULT_CONFIG["max_source_channels"]
     reaction_limit = (
-        reaction_limit if reaction_limit is not None else config.get("reaction_limit", 10)
+        reaction_limit if reaction_limit is not None else config.get("reaction_limit") or DEFAULT_CONFIG["reaction_limit"]
     )
     views_limit = (
-        views_limit if views_limit is not None else config.get("views_limit", 50)
+        views_limit if views_limit is not None else config.get("views_limit") or DEFAULT_CONFIG["views_limit"]
     )
 
     from modules.sync import sync_channel
@@ -54,7 +55,7 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None, views_li
 
         # 获取转发来源统计
         forwarding_results = get_forward_sources(
-            conn, forward_limit if forward_limit != 0 else 9999
+            conn, max_source_channels if max_source_channels != 0 else 9999
         )
 
         forward_sources = []
