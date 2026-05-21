@@ -73,7 +73,7 @@ def forward_with_recursion(
     source_channels: list[int],
     target_channel: int,
     current_depth: int = 1,
-    max_depth: int | None = None,
+    max_depth: int | None = None,  # None=不递归，0=禁用，>0=递归层数
     processed_channels: set[int] | None = None,
     check_exists: bool = False,
     force: bool = False,
@@ -84,15 +84,18 @@ def forward_with_recursion(
     """递归转发高反应消息
 
     语义约定：
-    - max_depth=None → 无限制（递归到所有层级）
-    - max_depth=0 → 禁用递归（上层调用时会避免传入0）
-    - max_depth=N → 最多递归N层
+    - max_depth=None → 不递归（仅处理当前频道）
+    - max_depth=0 → 禁用递归（明确禁用）
+    - max_depth>0 → 递归 N 层
 
     Args:
         source_channels: 当前层级的源频道列表
         target_channel: 目标频道ID
         current_depth: 当前深度
-        max_depth: 最大深度（None=无限制，0=禁用递归，N=最多N层）
+        max_depth: 递归深度
+            - None: 不递归（仅处理当前频道）
+            - 0: 禁用递归
+            - >0: 递归层数
         processed_channels: 已处理的频道集合
         check_exists: 是否检查消息是否存在
         force: 是否强制转发（忽略限制）

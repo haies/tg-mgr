@@ -207,7 +207,7 @@ def run_forward(args):
 
     # 处理频道参数（支持递归）
     if channel_ids:
-        if recursion_depth <= 0:
+        if recursion_depth is None or recursion_depth == 0:
             print(f"[FORWARD] 处理 {len(channel_ids)} 个频道（无递归）...")
             for channel_id in channel_ids:
                 print(f"[FORWARD] ========== 处理频道: {channel_id} ==========")
