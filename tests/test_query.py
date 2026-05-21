@@ -167,3 +167,46 @@ class TestGetForwardSources:
         assert len(results) == 0
 
         temp_db.close()
+
+
+def test_deduplicate_media_groups():
+    """同一媒体组只保留反应最高的"""
+    from database.query import _deduplicate_media_groups
+
+    messages = [
+        {"message_id": 1, "media_group_id": "grp1", "total": 10},
+        {"message_id": 2, "media_group_id": "grp1", "total": 50},  # 最高，应保留
+        {"message_id": 3, "media_group_id": "grp1", "total": 20},
+        {"message_id": 4, "media_group_id": None, "total": 30},  # 无组别，保持
+        {"message_id": 5, "media_group_id": "grp2", "total": 5},
+    ]
+    result = _deduplicate_media_groups(messages)
+    result_ids = {m["message_id"] for m in result}
+
+    assert result_ids == {2, 4, 5}, f"Expected {{2, 4, 5}}, got {result_ids}"
+    # grp1 中 total=50 的消息被保留
+    assert any(m["message_id"] == 2 and m["total"] == 50 for m in result)
+
+
+def test_deduplicate_no_groups():
+    """无媒体组消息不受影响"""
+    from database.query import _deduplicate_media_groups
+
+    messages = [
+        {"message_id": 1, "media_group_id": None, "total": 10},
+        {"message_id": 2, "media_group_id": None, "total": 20},
+    ]
+    result = _deduplicate_media_groups(messages)
+    assert len(result) == 2
+
+
+def test_deduplicate_single_in_group():
+    """组内只有一条消息时直接保留"""
+    from database.query import _deduplicate_media_groups
+
+    messages = [
+        {"message_id": 1, "media_group_id": "grp1", "total": 10},
+    ]
+    result = _deduplicate_media_groups(messages)
+    assert len(result) == 1
+    assert result[0]["message_id"] == 1
