@@ -31,6 +31,25 @@ from database.messages import (  # noqa: E402
     update_message_duplicate,
 )
 
+# 导出数据库错误类
+from database.errors import (  # noqa: E402
+    DatabaseError,
+    DatabaseConnectionError,
+    DatabaseQueryError,
+    DatabaseLockError,
+)
+
+
+__all__ = [
+    "get_db",
+    "get_database_path",
+    "get_schema_path",
+    "DatabaseError",
+    "DatabaseConnectionError",
+    "DatabaseQueryError",
+    "DatabaseLockError",
+]
+
 
 def get_project_tmp_dir() -> Path:
     """获取项目 tmp 目录路径"""
