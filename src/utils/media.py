@@ -20,6 +20,7 @@ class MediaInfo:
     file_size: int | None
     media_type: str | None
     views: int = 0
+    media_group_id: str | None = None  # 媒体组ID，同一媒体组的消息共享相同的 media_group_id
 
 
 @dataclass
