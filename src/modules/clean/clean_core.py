@@ -76,7 +76,7 @@ def main() -> None:
         print(f"{'='*50}")
 
         # 只有在同步或强制重置时才清空数据库
-        if should_sync or args.f:
+        if should_sync or args.R:
             force_reset_database()
             sync_channel(channel_id=channel)
 

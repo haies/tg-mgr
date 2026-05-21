@@ -16,12 +16,10 @@ from pyrogram.types import (
 
 from database import get_db
 from utils.telegram_client import get_client, get_log_path
-from utils.telegram_link import get_channel_address
 
 logger = logging.getLogger(__name__)
 
-# 默认递归深度
-DEFAULT_RECURSION_DEPTH = 5
+# get_channel_address 已移除 - 使用 telegram_link.get_channel_address
 
 
 def _get_reaction_total(message: Message) -> int:

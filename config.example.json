@@ -1,0 +1,22 @@
+{
+  "channel_id": null,
+  "reaction_limit": 200,
+  "views_limit": 100,
+  "reaction_threshold_multiplier": 6,
+  "views_threshold_multiplier": 5,
+  "max_source_channels": 10,
+  "download_dir": "~/Downloads/Telegram",
+  "max_retries": 5,
+  "retry_delay_base": 1,
+  "filter_min_size": 1048576,
+  "filter_max_size": 1073741824,
+  "media_types": [
+    "photo",
+    "video",
+    "document",
+    "audio",
+    "animation",
+    "text",
+    "video_note"
+  ]
+}

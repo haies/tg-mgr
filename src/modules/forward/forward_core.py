@@ -72,7 +72,6 @@ def main():
         _force_send_single_message,
         _force_send_media_group,
     )
-    from database.query import VIEWS_THRESHOLD_MULTIPLIER
 
     parser = argparse.ArgumentParser(description="高反应消息转发模块")
     parser.add_argument("sources", nargs="+", help="源频道ID或消息链接")
@@ -103,13 +102,12 @@ def main():
     default_views_limit = config.get("views_limit") if config.get("views_limit") is not None else DEFAULT_CONFIG["views_limit"]
     default_max_source_channels = config.get("max_source_channels", default_reaction_limit)
 
-    # 从配置读取递归深度（默认 5），-r 参数可覆盖
+    # 从配置读取递归深度（默认 None=不递归），-r 参数可覆盖
     configured_depth = config.get("recursion_depth") if config.get("recursion_depth") is not None else DEFAULT_CONFIG["recursion_depth"]
     recursion_depth = args.depth if args.depth is not None else configured_depth
 
-    # 如果未指定 -r 参数且使用 -f，改为非递归模式（使用主数据库，与 info 保持一致）
-    # 只有明确使用 -r 参数时才启用递归 temp DB 模式（避免 views 数据丢失）
-    if args.force and args.depth is None and recursion_depth > 0:
+    # 如果未指定 -r 参数且使用 -f，改为非递归模式（与 info 保持一致）
+    if args.force and args.depth is None and recursion_depth is not None and recursion_depth > 0:
         print("[FORWARD] 注意：-f 默认使用主数据库同步（与 tg info 一致）")
         print("[FORWARD] 如需递归模式，请额外指定 -r 参数")
         recursion_depth = 0
@@ -225,7 +223,7 @@ def main():
                         print(f"[FORWARD] 频道 {channel_id} 禁止转发，跳过")
                         continue
 
-                # 同步到主数据库（与 info 保持一致，避免 temp DB 中 views=0 导致数据不一致）
+                # 同步到主数据库（与 info 保持一致）
                 print(f"[FORWARD] 同步频道 {channel_id}...")
                 try:
                     sync_channel(channel_id=str(channel_id))
@@ -245,12 +243,9 @@ def main():
                             return
 
                     if messages:
-                        # 统计高反应和高浏览量消息数量
-                        avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
-                        avg_views = avg_row[0] if avg_row and isinstance(avg_row[0], (int, float)) else 0
-                        threshold = avg_views * VIEWS_THRESHOLD_MULTIPLIER if avg_views > 0 else 0
-                        high_reaction_count = sum(1 for m in messages if m.get("total", 0) > 0)
-                        high_views_count = sum(1 for m in messages if m.get("views", 0) > threshold)
+                        # 统计高反应和高浏览量消息数量（通过 msg_type 字段）
+                        high_reaction_count = sum(1 for m in messages if m.get("msg_type") == "high_reaction")
+                        high_views_count = sum(1 for m in messages if m.get("msg_type") == "high_views")
                         print(f"[FORWARD] 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
                     else:
                         print(f"[FORWARD] 频道 {channel_id} 找到 0 条消息")

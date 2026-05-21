@@ -93,10 +93,12 @@ DEFAULT_CONFIG: dict = {
     "channel_id": None,
     "download_dir": "~/Downloads/Telegram",
     # 转发相关
-    "reaction_limit": 10,
-    "views_limit": 50,
+    "reaction_limit": 200,
+    "views_limit": 100,
+    "reaction_threshold_multiplier": 6,  # 反应数 > 6 * 频道内平均反应数
+    "views_threshold_multiplier": 5,     # 浏览量 > 5 * 频道内平均浏览量
     "max_source_channels": 10,
-    "recursion_depth": 5,
+    "recursion_depth": None,  # None=不递归，仅转发频道内消息
     # 清理相关
     "filter_min_size": 1048576,      # 1MB
     "filter_max_size": 1073741824,   # 1GB

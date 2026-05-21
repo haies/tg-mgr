@@ -90,7 +90,7 @@ class TestParseExportArgs:
 
     def test_empty_args_uses_config_default(self):
         """测试空参数使用配置文件默认值"""
-        with patch('modules.export.get_config') as mock_config:
+        with patch('modules.export.cli.get_config') as mock_config:
             mock_config.return_value = {'channel_id': '-1001234567890'}
             args = parse_export_args([])
             assert args.channel_ids == ['-1001234567890']

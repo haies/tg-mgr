@@ -5,7 +5,6 @@ from typing import Any
 
 from database import get_db
 from database.query import (
-    VIEWS_THRESHOLD_MULTIPLIER,
     find_forward_sources_by_channel,
     find_top_messages,
 )
@@ -74,27 +73,32 @@ def forward_with_recursion(
     source_channels: list[int],
     target_channel: int,
     current_depth: int = 1,
-    max_depth: int = 5,
+    max_depth: int | None = None,
     processed_channels: set[int] | None = None,
     check_exists: bool = False,
     force: bool = False,
     reaction_limit: int = 10,
     views_limit: int = 50,
-    forward_limit: int = 10,
+    max_source_channels: int = 10,
 ) -> tuple[int, int, int]:
     """递归转发高反应消息
+
+    语义约定：
+    - max_depth=None → 无限制（递归到所有层级）
+    - max_depth=0 → 禁用递归（上层调用时会避免传入0）
+    - max_depth=N → 最多递归N层
 
     Args:
         source_channels: 当前层级的源频道列表
         target_channel: 目标频道ID
         current_depth: 当前深度
-        max_depth: 最大深度
+        max_depth: 最大深度（None=无限制，0=禁用递归，N=最多N层）
         processed_channels: 已处理的频道集合
         check_exists: 是否检查消息是否存在
         force: 是否强制转发（忽略限制）
-        reaction_limit: 高反应消息数量限制
-        views_limit: 高浏览量消息数量限制
-        forward_limit: 转发来源TOP数量限制（与 info.py 一致）
+        reaction_limit: 高反应消息数量限制（必须从config解析后传入）
+        views_limit: 高浏览量消息数量限制（必须从config解析后传入）
+        max_source_channels: 每层递归最多处理的来源频道数（必须从config传入）
 
     Returns:
         (total_forwarded, total_skipped, total_failed)
@@ -102,8 +106,8 @@ def forward_with_recursion(
     if processed_channels is None:
         processed_channels = set()
 
-    # 检查深度限制
-    if current_depth > max_depth:
+    # 检查深度限制（max_depth 为 None 表示无限制）
+    if max_depth is not None and current_depth > max_depth:
         return 0, 0, 0
 
     total_forwarded = 0
@@ -133,17 +137,12 @@ def forward_with_recursion(
 
         # 使用主数据库查询（与 info 保持一致）
         with get_db() as conn:
-            # 获取平均浏览量用于计算阈值（与 query.find_messages_by_views_top 保持一致）
-            avg_row = conn.execute("SELECT COALESCE(AVG(views), 0) FROM messages WHERE views > 0").fetchone()
-            avg_views = avg_row[0] if avg_row and isinstance(avg_row[0], (int, float)) else 0
-            threshold = avg_views * VIEWS_THRESHOLD_MULTIPLIER if avg_views > 0 else 0
-
             # 查找要转发的消息（第1层不按source_id过滤，与info一致；递归层按source_id过滤）
             filter_by_source = current_depth > 1
             messages = find_messages_to_forward(conn, channel_id, reaction_limit, views_limit, filter_by_source=filter_by_source)
-            # 统计高反应和高浏览量消息数量
-            high_reaction_count = sum(1 for m in messages if m.get("total", 0) > 0)
-            high_views_count = sum(1 for m in messages if m.get("views", 0) > threshold)
+            # 统计高反应和高浏览量消息数量（通过 msg_type 字段）
+            high_reaction_count = sum(1 for m in messages if m.get("msg_type") == "high_reaction")
+            high_views_count = sum(1 for m in messages if m.get("msg_type") == "high_views")
             print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
 
             if messages:
@@ -153,9 +152,9 @@ def forward_with_recursion(
                 total_skipped += s
                 total_failed += fa
 
-                # 递归处理下一层（使用与 info.py 一致的 forward_limit 获取来源频道）
-                if current_depth < max_depth:
-                    next_channels = find_forward_sources_by_channel(conn, channel_id, limit=forward_limit)
+                # 递归处理下一层（使用 max_source_channels 限制来源频道数）
+                if max_depth is not None and current_depth < max_depth:
+                    next_channels = find_forward_sources_by_channel(conn, channel_id, limit=max_source_channels)
                     if next_channels:
                         source_channel_ids = [ch[0] for ch in next_channels]
                         print(f"[FORWARD] 深度 {current_depth}: 发现来源频道 {len(source_channel_ids)} 个")
@@ -169,7 +168,7 @@ def forward_with_recursion(
                             force,
                             reaction_limit,
                             views_limit,
-                            forward_limit,
+                            max_source_channels,
                         )
                         total_forwarded += nf
                         total_skipped += ns

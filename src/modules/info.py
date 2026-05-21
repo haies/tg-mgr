@@ -121,9 +121,9 @@ def main():
         "channel_id", nargs="?", type=int, help="频道ID（可选，不填则列出所有频道）"
     )
     parser.add_argument(
-        "-f", "--force", action="store_true", help="强制重置数据库并重新同步（获取所有历史消息）"
+        "-R", "--reset", action="store_true", help="强制重置数据库并重新同步（获取所有历史消息）"
     )
-    parser.add_argument("reaction_limit", nargs="?", type=int, help="高反应消息数量限制（可选）")
+    parser.add_argument("-l", "--limit", type=int, dest="reaction_limit", help="高反应消息数量限制（可选）")
     parser.add_argument("-v", "--views-limit", type=int, dest="views_limit", help="高浏览量消息数量限制（可选）")
 
     args = parser.parse_args()
@@ -135,7 +135,7 @@ def main():
     else:
         # 指定频道ID模式
         # 强制重置模式：删除数据库并重新同步
-        if args.force:
+        if args.reset:
             force_reset_database()
 
         result = analyze_channel(args.channel_id, reaction_limit=args.reaction_limit, views_limit=args.views_limit)
