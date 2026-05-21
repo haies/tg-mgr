@@ -3,12 +3,12 @@ import logging
 import sqlite3
 from typing import Any
 
+from modules.forward import forward_core
 from database import get_db
 from database.query import (
     find_forward_sources_by_channel,
     find_top_messages,
 )
-from utils.telegram_client import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ def forward_with_recursion(
         # 检查频道转发权限（force模式跳过）
         print(f"[FORWARD] 深度 {current_depth}: 检查频道 {channel_id}...")
         if not force:
-            with get_client("tg-mgr") as client:
+            with forward_core.get_client("tg-mgr") as client:
                 if not is_channel_forwarding_allowed(client, channel_id):
                     print(f"[FORWARD] 深度 {current_depth}: 频道 {channel_id} 禁止转发，跳过")
                     continue

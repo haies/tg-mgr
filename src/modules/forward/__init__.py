@@ -33,18 +33,34 @@ from modules.forward.preview import (
 
 from modules.forward.recursive import (
     forward_with_recursion,
-    find_messages_to_forward,
+    find_messages_to_forward as _find_messages_to_forward,
     sync_channel_for_forward,
     is_channel_forwarding_allowed,
     extract_source_channels,
 )
+
+
+def find_high_reaction_messages(channel_id: int, conn, reaction_limit: int = 10, views_limit: int = 50):
+    """Backward compatibility alias - swaps (channel_id, conn) to (conn, channel_id)"""
+    return _find_messages_to_forward(conn, channel_id, reaction_limit, views_limit)
 
 from modules.forward.cli import (
     parse_source_arg,
     resolve_username_to_channel_id,
 )
 
-# 重新导出一些常用函数和类，使测试可以 patch modules.forward.get_client 等
+# Re-export for backward compatibility (forward_core used to contain these)
+from modules.forward.forward_core import (
+    get_client as forward_core_get_client,
+    get_config as forward_core_get_config,
+    sync_channel as forward_core_sync_channel,
+    get_db as forward_core_get_db,
+)
+
+# Also re-export core module get_config for backward compat (patches use modules.forward.core.get_config)
+from modules.forward.core import get_config as core_get_config
+
+# Also export directly (used by tests)
 from utils.telegram_client import get_client, get_config
 from modules.sync import sync_channel
 from database import get_db
@@ -54,6 +70,7 @@ __all__ = [
     'run_forward',
     'forward_with_recursion',
     'find_messages_to_forward',
+    'find_high_reaction_messages',  # backward compat alias
     'summarize_messages_for_forward',
     'confirm_forward',
     'forward_messages_batch',

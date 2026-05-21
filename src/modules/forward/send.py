@@ -14,8 +14,9 @@ from pyrogram.types import (
     Message,
 )
 
+from modules.forward import forward_core
 from database import get_db
-from utils.telegram_client import get_client, get_log_path
+from utils.telegram_client import get_log_path
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +329,7 @@ def forward_messages_batch(
     skipped = 0
     failed = 0
 
-    with get_client("tg-mgr") as client:
+    with forward_core.get_client("tg-mgr") as client:
         # 确保已加入目标频道
         for target_id in target_channel_ids:
             try:

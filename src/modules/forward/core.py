@@ -1,19 +1,66 @@
 """转发模块核心逻辑"""
 from modules.forward.cli import parse_source_arg, resolve_username_to_channel_id
-from modules.forward.preview import summarize_messages_for_forward, confirm_forward
+from modules.forward import preview
+import modules.forward.send as send_module
 from modules.forward.send import (
     forward_single_message,
     _get_original_media_group_message,
     _get_media_group_messages,
     _forward_media_group,
-    forward_messages_batch,
     _build_stats_str as send_build_stats_str,
     get_channel_address as _get_channel_address,
 )
 from modules.forward.force import _force_send_single_message, _force_send_media_group
-from utils.telegram_client import DEFAULT_CONFIG, get_client, get_config
-from modules.sync import sync_channel
-from database import get_db
+from modules.forward import recursive
+from modules.forward import forward_core
+
+# Use forward_core's config so tests can patch it via forward_core.get_config
+DEFAULT_CONFIG = forward_core.DEFAULT_CONFIG
+
+
+def get_db():
+    return forward_core.get_db()
+
+
+def get_client(session_name="tg-mgr"):
+    return forward_core.get_client(session_name)
+
+
+def get_config():
+    return forward_core.get_config()
+
+
+def sync_channel(channel_id):
+    return forward_core.sync_channel(channel_id)
+
+
+def find_messages_to_forward(conn, channel_id, reaction_limit=10, views_limit=50, filter_by_source=False):
+    return recursive.find_messages_to_forward(conn, channel_id, reaction_limit, views_limit, filter_by_source)
+
+
+def is_channel_forwarding_allowed(client, channel_id):
+    return recursive.is_channel_forwarding_allowed(client, channel_id)
+
+
+def sync_channel_for_forward(channel_id: int) -> None:
+    return recursive.sync_channel_for_forward(channel_id)
+
+
+def forward_messages_batch(source_channel_id, target_channel_ids, messages, check_exists=False, force=False):
+    return send_module.forward_messages_batch(source_channel_id, target_channel_ids, messages, check_exists, force)
+
+
+def forward_with_recursion(source_channels, target_channel, current_depth=1, max_depth=None, processed_channels=None, check_exists=False, force=False, reaction_limit=10, views_limit=50, max_source_channels=10):
+    return recursive.forward_with_recursion(source_channels, target_channel, current_depth, max_depth, processed_channels, check_exists, force, reaction_limit, views_limit, max_source_channels)
+
+
+# Wrap preview functions so patches on preview.* take effect
+def summarize_messages_for_forward(conn, messages):
+    return preview.summarize_messages_for_forward(conn, messages)
+
+
+def confirm_forward(messages, summary):
+    return preview.confirm_forward(messages, summary)
 
 
 def _get_reaction_total(message):
