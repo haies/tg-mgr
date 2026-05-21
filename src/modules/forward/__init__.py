@@ -17,17 +17,13 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 # 从各子模块导入主要接口（保持向后兼容）
-from modules.forward.forward_core import (
-    main,
-    _build_stats_str,
-    find_high_reaction_messages,
-)
+from modules.forward.main import main
+from modules.forward.core import run_forward
 
 from modules.forward.send import (
     forward_messages_batch,
     forward_single_message,
     get_channel_address,
-    DEFAULT_RECURSION_DEPTH,
 )
 
 from modules.forward.preview import (
@@ -55,9 +51,9 @@ from database import get_db
 
 __all__ = [
     'main',
+    'run_forward',
     'forward_with_recursion',
     'find_messages_to_forward',
-    'find_high_reaction_messages',
     'summarize_messages_for_forward',
     'confirm_forward',
     'forward_messages_batch',
@@ -68,8 +64,6 @@ __all__ = [
     'resolve_username_to_channel_id',
     'sync_channel_for_forward',
     'extract_source_channels',
-    'DEFAULT_RECURSION_DEPTH',
-    '_build_stats_str',
     'get_client',
     'get_config',
     'sync_channel',
