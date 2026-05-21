@@ -1,16 +1,14 @@
 # tg-mgr - Telegram Channel Management Tool
 
-A Telegram channel management tool based on Pyrogram, supporting message synchronization, deduplication, cleanup, filtering, and export.
+A Telegram channel management CLI tool based on Pyrogram, supporting message synchronization, deduplication, cleanup, filtering, export, and high-reaction message forwarding.
 
 ## Features
 
-- **Sync**: Incremental message synchronization with breakpoint resume
-- **Deduplicate**: Detect and remove duplicate media files (window function optimization)
-- **Clean**: Remove invalid/restricted messages and junk messages with signal handling
-- **Filter**: Filter media by file size (e.g., >1GB or <1MB)
-- **Export**: Export messages to Telegram Desktop format (JSON + HTML)
-- **Info**: Analyze channel statistics (forward sources, high-reaction messages, top views)
-- **Forward**: Copy high-reaction messages between channels with recursive depth and force mode
+- **clean**: Sync messages + detect/remove duplicates + cleanup invalid/junk
+- **filter**: Find media by file size (>1GB or <1MB)
+- **export**: Export channel to Telegram Desktop format (JSON + HTML with media)
+- **info**: Analyze channel stats (forward sources, high-reaction messages, top views)
+- **forward**: Copy high-reaction messages between channels with recursive forwarding
 - **init**: Interactive setup wizard
 - **sessions**: Session file management
 
@@ -55,9 +53,14 @@ Get API credentials from https://my.telegram.org
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `forward_limit` | 10 | Top N forward sources |
-| `reaction_limit` | 10 | Top N high-reaction messages |
-| `views_limit` | 50 | Top N high-views messages (views > 8x avg) |
+| `channel_id` | null | Default channel ID |
+| `reaction_limit` | 200 | Max high-reaction messages (total > 6x channel avg) |
+| `views_limit` | 100 | Max high-views messages (views > 5x channel avg) |
+| `reaction_threshold_multiplier` | 6 | Reaction threshold multiplier |
+| `views_threshold_multiplier` | 5 | Views threshold multiplier |
+| `max_source_channels` | 10 | Max source channels for recursive forwarding |
+| `filter_min_size` | 1048576 (1MB) | Media size filter minimum |
+| `filter_max_size` | 1073741824 (1GB) | Media size filter maximum |
 | `download_dir` | ~/Downloads/Telegram | Media download directory |
 | `max_retries` | 5 | API max retries |
 | `media_types` | all types | Supported media types |
@@ -65,22 +68,26 @@ Get API credentials from https://my.telegram.org
 ## Usage
 
 ```bash
-tg <module> [args]
+tg <module> [channels] [options]
 ```
+
+All modules use `channels` as positional parameter. Use `tg <module> --help` for details.
+
+---
 
 ### clean - Sync & Cleanup
 
 ```bash
-tg clean              # Sync only
-tg clean -d           # Sync + deduplicate
-tg clean -i           # Sync + cleanup invalid
-tg clean -s           # Sync + cleanup junk messages
-tg clean -di          # Sync + deduplicate + cleanup invalid
-tg clean -dis         # Sync + deduplicate + invalid + junk
-tg clean -y           # Preview mode (list only, no delete)
-tg clean -f           # Force reset database
-tg clean -u           # Force sync (breakpoint resume)
-tg clean <channel1> <channel2>  # Multi-channel cleanup
+tg clean                          # Sync default channel
+tg clean -d                       # Sync + deduplicate
+tg clean -i                       # Sync + cleanup invalid
+tg clean -s                       # Sync + cleanup junk
+tg clean -di                      # Sync + deduplicate + cleanup invalid
+tg clean -dis                     # Sync + deduplicate + invalid + junk
+tg clean -y                       # Preview mode (list only, no delete)
+tg clean -R                       # Force reset database and re-sync
+tg clean -u                       # Force sync (breakpoint resume)
+tg clean <channel1> <channel2>    # Multi-channel cleanup
 ```
 
 **Junk Message Detection:**
@@ -90,104 +97,112 @@ tg clean <channel1> <channel2>  # Multi-channel cleanup
 
 **Preview Mode (-y):** Lists all pending deletions by type with media type breakdown before actual cleanup.
 
+---
+
 ### filter - Media Size Filter
 
 ```bash
-tg filter                         # Default: outside 1MB~1GB
-tg filter --min-size 1048576     # Files larger than 1MB
-tg filter --max-size 1048576     # Files smaller than 1MB
-tg filter --min-size 0 --max-size 1048576  # Smaller than 1MB
+tg filter                        # Use channel_id from config
+tg filter <channel_id>           # Specify channel
+tg filter -m 1048576             # Min size: larger than 1MB
+tg filter -M 1073741824          # Max size: smaller than 1GB
+tg filter -m 0 -M 1048576        # Smaller than 1MB
 ```
+
+---
 
 ### export - Archive Export
 
 ```bash
-tg export                           # Default channel
-tg export -1001234567890            # Single channel
-tg export -1001234567890 -1009876543210  # Multiple channels
-tg export https://t.me/c/1234567890/100   # From message URL
+tg export                                  # Default channel
+tg export <channel_id>                     # Single channel
+tg export <channel1> <channel2>           # Multiple channels
+tg export https://t.me/c/1234567890/100    # From message URL
 ```
 
 Features: Telegram Desktop format, media download, resume support, incremental export
 
+---
+
 ### info - Channel Analysis
 
 ```bash
-tg info                          # List all channels
-tg info -1001234567890           # Analyze specific channel
-tg info -1001234567890 20        # Top 20 high-reaction messages
-tg info -1001234567890 -f        # Force reset database and re-sync
-tg info -1001234567890 20 -v 50  # Custom limits: reaction=20, views=50
+tg info                          # List all accessible channels
+tg info <channel_id>             # Analyze specific channel
+tg info <channel_id> -R          # Force reset and re-sync
+tg info <channel_id> -l 20        # Top 20 high-reaction messages
+tg info <channel_id> -v 50       # Top 50 high-views messages
 ```
 
 **Analysis Output:**
-- Forward sources (where messages are forwarded from)
-- Top views (messages with views > 8x average, max 50 by default)
-- High-reaction messages (likes + hearts, max 10 by default)
+- Forward sources: where messages are forwarded from (top N by message count)
+- High-views: messages with views > 5x channel average
+- High-reaction: messages with total (likes + hearts) > 6x channel average
 
-**Parameters:**
-- `reaction_limit` positional arg: high-reaction message count limit
-- `-v, --views-limit`: high-views message count limit (overrides config)
+---
 
 ### forward - Message Forwarding
 
 ```bash
-# Basic forwarding
-tg forward -1001234567890 -o -100555666777              # Single channel to target
-tg forward -1001234567890 -1009876543210 -o -100555666777  # Multiple sources
+# Basic forwarding (single source channel)
+tg forward <channel_id> -o <target_channel>
 
-# Recursive forwarding (-r 0 disables recursion)
-tg forward -1001234567890 -o -100555666777 -r 3       # Depth 3, discovers source channels
+# Multiple source channels
+tg forward <channel1> <channel2> -o <target_channel>
+
+# Recursive forwarding with depth
+tg forward <channel_id> -o <target_channel> -r 3
 
 # Force mode (bypass restrictions via download/re-upload)
-tg forward -1001234567890 -o -100555666777 -f          # Shows preview first, then forwards
+tg forward <channel_id> -o <target_channel> -f
 
-# Custom limits (override config.json defaults)
-tg forward -1001234567890 -o -100555666777 -l 20 -v 100  # reaction=20, views=100
+# Custom limits (override config.json)
+tg forward <channel_id> -o <target_channel> -l 20 -v 100
 
-# Check before forward (skip existing messages)
-tg forward -1001234567890 -o -100555666777 -c
+# Check before forward
+tg forward <channel_id> -o <target_channel> -c
 
-# Combine all options
-tg forward -1001234567890 -o -100555666777 -r 3 -f -c -l 20 -v 100
+# Combine options
+tg forward <channel_id> -o <target_channel> -r 3 -f -c -l 20 -v 100
 
 # Direct message link forwarding (single message, no recursion)
-tg forward https://t.me/c/1234567890/100 -o -100555666777
-tg forward https://t.me/c/1234567890/100 -o -100555666777 -f
+tg forward https://t.me/c/1234567890/100 -o <target_channel>
 ```
 
 **Parameters:**
+
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-o, --target` | Target channel ID | From config.json |
+| `channels` | Source channel ID(s) or message links | Required |
+| `-o, --target` | Target channel ID | Required |
 | `-c, --check` | Check if message exists before forwarding | False |
-| `-r, --depth` | Recursion depth (0=disabled) | 5 |
+| `-r, --depth` | Recursion depth (None/0=disabled, >0=N layers) | From config (None) |
 | `-f, --force` | Force forward (download & re-upload) | False |
-| `-l, --limit` | High-reaction message limit | From config (10) |
-| `-v, --views-limit` | High-views message limit | From config (50) |
+| `-l, --limit` | High-reaction message limit | From config (200) |
+| `-v, --views-limit` | High-views message limit | From config (100) |
+
+**Recursion Depth Semantics:**
+- `-r` not specified → No recursion (process only source channel)
+- `-r 0` → Explicitly disabled
+- `-r N` (N>0) → Recurse N layers, discovering source channels at each level
 
 **Features:**
-- High-reaction message filtering (likes + hearts)
-- High-views message filtering (views > 8x average)
-- Media group support (bidirectional search for complete groups)
-- Recursive depth forwarding (-r discovers source channels at each level)
-- Force mode (-f downloads content and re-uploads to bypass restrictions)
+- High-reaction filtering: total > 6x channel average
+- High-views filtering: views > 5x channel average
+- Media group support (bidirectional search)
+- Recursive depth forwarding (-r discovers source channels)
+- Force mode (-f downloads and re-uploads to bypass restrictions)
 - Direct message link forwarding (single message, no recursion)
 
-**Force Mode Flow:**
-1. Shows preview with message count, media size, and message list
-2. User confirms with 'y'
-3. Downloads media to temp directory
-4. Re-uploads to target channel
-5. Cleans up temp files
-
-**Config Precedence:** CLI argument > config.json > hard-coded default
+---
 
 ### init - Interactive Setup
 
 ```bash
 tg init    # Interactive configuration wizard
 ```
+
+---
 
 ### sessions - Session Management
 
