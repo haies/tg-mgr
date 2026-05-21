@@ -19,11 +19,15 @@ if str(src_path) not in sys.path:
 # 从各子模块导入主要接口（保持向后兼容）
 from modules.forward.forward_core import (
     main,
+    _build_stats_str,
+    find_high_reaction_messages,
+)
+
+from modules.forward.send import (
     forward_messages_batch,
     forward_single_message,
-    _build_stats_str,
-    DEFAULT_RECURSION_DEPTH,
     get_channel_address,
+    DEFAULT_RECURSION_DEPTH,
 )
 
 from modules.forward.preview import (
@@ -48,11 +52,6 @@ from modules.forward.cli import (
 from utils.telegram_client import get_client, get_config
 from modules.sync import sync_channel
 from database import get_db
-
-# 向后兼容别名 - 需要正确包装参数顺序
-def find_high_reaction_messages(channel_id: int, conn) -> list:
-    """向后兼容别名"""
-    return find_messages_to_forward(conn, channel_id)
 
 __all__ = [
     'main',

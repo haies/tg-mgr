@@ -1,539 +1,19 @@
-"""转发模块核心逻辑"""
-import logging
-import os
-import re
-import sqlite3
+"""转发模块核心逻辑 - main() 入口"""
 import sys
-import time
+from pathlib import Path
 from typing import Any
 
-from pyrogram import Client, errors
-from pyrogram.types import (
-    InputMedia,
-    InputMediaAnimation,
-    InputMediaAudio,
-    InputMediaDocument,
-    InputMediaPhoto,
-    InputMediaVideo,
-    Message,
-)
+from pyrogram import Client
 
-from database import get_db
-from database.query import (
-    VIEWS_THRESHOLD_MULTIPLIER,
-    find_forward_sources_by_channel,
-    find_top_messages,
-    get_forward_sources,
-)
+# 确保 src/ 在 sys.path 中
+src_path = Path(__file__).parent.parent.parent
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+# 模块级导入（支持测试 patch）
+from utils.telegram_client import get_client, get_config
 from modules.sync import sync_channel
-from utils.telegram_client import get_client, get_config, get_log_path
-from utils.telegram_link import get_channel_address
-
-logger = logging.getLogger(__name__)
-
-# 默认递归深度
-DEFAULT_RECURSION_DEPTH = 5
-
-
-def _get_reaction_total(message: Message) -> int:
-    """从消息中提取反应总数（委托给 utils.media.extract_reaction_data）"""
-    from utils.media import extract_reaction_data
-    return extract_reaction_data(message).total
-
-
-def _get_download_dir() -> str:
-    """获取下载目录，默认为 ~/.tg-mgr/downloads/"""
-    config_dir = os.path.expanduser("~/.tg-mgr")
-    download_dir = os.path.join(config_dir, "downloads")
-    os.makedirs(download_dir, exist_ok=True)
-    return download_dir
-
-
-def get_channel_address(channel_id: int) -> str:
-    """获取频道链接地址，与 telegram_link.py 保持一致"""
-    return f"https://t.me/c/{abs(channel_id)}"
-
-
-def forward_single_message(
-    client: Client,
-    source_channel_id: int,
-    target_channel_id: int,
-    message_id: int,
-    force: bool = False,
-) -> bool:
-    """转发单条消息
-
-    Args:
-        client: Telegram 客户端
-        source_channel_id: 源频道ID
-        target_channel_id: 目标频道ID
-        message_id: 消息ID
-        force: 是否强制转发（忽略限制）
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # 检查是否是媒体组的一部分
-        group_msg = _get_original_media_group_message(client, source_channel_id, message_id)
-        if group_msg and group_msg.media_group_id:
-            # 媒体组：使用 send_media_group 转发
-            media_group_messages = _get_media_group_messages(
-                client, source_channel_id, group_msg.media_group_id, message_id
-            )
-            return _forward_media_group(client, source_channel_id, target_channel_id, media_group_messages, force=force)
-        else:
-            # 普通消息：直接复制
-            client.copy_message(  # type: ignore[unused-coroutine]
-                chat_id=target_channel_id,
-                from_chat_id=source_channel_id,
-                message_id=message_id,
-            )
-        return True
-    except errors.FloodWait as e:
-        wait = max(e.value, 5)
-        time.sleep(wait)
-        return False
-    except (errors.Forbidden, errors.BadRequest):
-        return False
-    except Exception as e:
-        logger.debug(f"转发消息失败: {e}")
-        return False
-
-
-def _get_original_media_group_message(
-    client: Client, channel_id: int, message_id: int
-) -> Message | None:
-    """获取消息所在的媒体组原消息"""
-    try:
-        # 先调用 get_chat 建立会话，解决 CHAT_ID_INVALID 问题
-        client.get_chat(channel_id)  # type: ignore[unused-coroutine]
-        msgs = client.get_messages(channel_id, message_id)  # type: ignore[union-attr]
-        return msgs  # type: ignore[return-value]
-    except Exception:
-        return None
-
-
-def _get_media_group_messages(
-    client: Client, channel_id: int, media_group_id: str, center_msg_id: int | None = None
-) -> list[Message]:
-    """获取媒体组的所有消息（双向搜索优化版）
-
-    Args:
-        client: Telegram 客户端
-        channel_id: 频道ID
-        media_group_id: 媒体组ID
-        center_msg_id: 中心消息ID，用于双向搜索
-
-    Returns:
-        媒体组消息列表（按 message_id 排序）
-    """
-    try:
-        # 先调用 get_chat 建立会话
-        client.get_chat(channel_id)  # type: ignore[unused-coroutine]
-
-        messages = []
-        seen_ids = set()
-
-        # 如果有 center_msg_id，先获取它作为起点
-        if center_msg_id:
-            try:
-                center_msg = client.get_messages(channel_id, center_msg_id)  # type: ignore[union-attr]
-                if center_msg and str(center_msg.media_group_id) == str(media_group_id):  # type: ignore[attr-defined]
-                    messages.append(center_msg)
-                    seen_ids.add(center_msg.id)  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-        # 双向搜索：
-        # - 向后搜索（offset_id=center_msg_id）：获取 id < center_msg_id 的消息
-        # - 向前搜索（offset_id=0）：获取 id > center_msg_id 的消息
-
-        if center_msg_id:
-            # 向后搜索：offset_id=center_msg_id 返回 <= center_msg_id 的消息
-            # 由于历史消息是 id 越低越旧，我们需要找 id < center_msg_id 的
-            found_any = False
-            for msg in client.get_chat_history(channel_id, limit=200, offset_id=center_msg_id):  # type: ignore[union-attr]
-                if msg.media_group_id == media_group_id and msg.id not in seen_ids:  # type: ignore[attr-defined]
-                    messages.append(msg)
-                    seen_ids.add(msg.id)  # type: ignore[attr-defined]
-                    found_any = True
-                    if len(messages) >= 10:
-                        break
-                elif found_any and msg.media_group_id != media_group_id:
-                    # 只有在找到过消息且遇到不同媒体组时才停止
-                    break
-
-            # 向前搜索：offset_id=0 返回最新消息，需要过滤 id > center_msg_id 的
-            found_any = False
-            for msg in client.get_chat_history(channel_id, limit=200, offset_id=0):  # type: ignore[union-attr]
-                if msg.id > center_msg_id and msg.media_group_id == media_group_id and msg.id not in seen_ids:  # type: ignore[attr-defined]
-                    messages.append(msg)
-                    seen_ids.add(msg.id)  # type: ignore[attr-defined]
-                    found_any = True
-                    if len(messages) >= 10:
-                        break
-                elif found_any and msg.id > center_msg_id and msg.media_group_id != media_group_id:
-                    # 只有在找到过消息且 id 已经在增长时，遇到不同媒体组才停止
-                    break
-        else:
-            # 没有 center_msg_id，使用批量获取（可能不准）
-            for msg in client.get_chat_history(channel_id, limit=200):  # type: ignore[union-attr]
-                if msg.media_group_id == media_group_id and msg.id not in seen_ids:  # type: ignore[attr-defined]
-                    messages.append(msg)
-                    seen_ids.add(msg.id)  # type: ignore[attr-defined]
-                    if len(messages) >= 10:
-                        break
-
-        # 按 message_id 排序
-        messages.sort(key=lambda m: m.id)  # type: ignore[attr-defined]
-        return messages  # type: ignore[return-value]
-    except Exception:
-        return []
-
-
-def _forward_media_group(
-    client: Client,
-    source_channel_id: int,
-    target_channel_id: int,
-    messages: list[Message],
-    force: bool = False,
-) -> bool:
-    """转发媒体组
-
-    Args:
-        client: Telegram 客户端
-        source_channel_id: 源频道ID
-        target_channel_id: 目标频道ID
-        messages: 媒体组消息列表
-        force: 是否强制转发（忽略限制）
-
-    Returns:
-        True if successful, False otherwise
-    """
-    if not messages:
-        return False
-
-    # 按 message_id 排序确保顺序正确
-    messages = sorted(messages, key=lambda m: m.id)
-
-    # 准备媒体组输入
-    media_list = []
-    for msg in messages:
-        media_input = _prepare_media_for_send(msg)
-        if media_input:
-            media_list.append(media_input)
-
-    if not media_list:
-        return False
-
-    try:
-        client.send_media_group(target_channel_id, media_list)  # type: ignore[unused-coroutine, arg-type]
-        return True
-    except errors.FloodWait as e:
-        wait = max(e.value, 5)
-        time.sleep(wait)
-        return False
-    except Exception as e:
-        logger.debug(f"媒体组转发失败: {e}")
-        return False
-
-
-def _prepare_media_for_send(message: Message) -> InputMedia | None:
-    """准备消息用于 send_media_group，返回正确的 InputMedia 类型"""
-    try:
-        caption = message.caption or ""
-        if message.photo:
-            return InputMediaPhoto(message.photo.file_id, caption=caption)
-        elif message.video:
-            return InputMediaVideo(message.video.file_id, caption=caption)
-        elif message.document:
-            return InputMediaDocument(message.document.file_id, caption=caption)
-        elif message.audio:
-            return InputMediaAudio(message.audio.file_id, caption=caption)
-        elif message.animation:
-            return InputMediaAnimation(message.animation.file_id, caption=caption)
-        elif message.voice:
-            # voice 和 video_note 不支持媒体组，使用 InputMedia
-            return InputMedia(message.voice.file_id, caption=caption)
-        elif message.video_note:
-            return InputMedia(message.video_note.file_id, caption=caption)
-        elif message.text:
-            # 纯文本消息不是媒体组的一部分
-            return None
-        return None
-    except Exception as e:
-        logger.debug(f"准备媒体发送失败: {e}")
-        return None
-
-
-def _download_with_resume(client: Client, message: Message, target_path: str, max_retries: int = 3) -> str | None:
-    """下载媒体文件，支持断点续传和重试
-
-    Args:
-        client: Telegram 客户端
-        message: 源消息
-        target_path: 目标文件路径
-        max_retries: 最大重试次数
-
-    Returns:
-        下载完成的文件路径，失败返回 None
-    """
-    # 获取文件信息
-    file_size = 0
-    if hasattr(message, 'video') and message.video:
-        file_size = message.video.file_size
-    elif hasattr(message, 'document') and message.document:
-        file_size = message.document.file_size
-    elif hasattr(message, 'photo') and message.photo:
-        file_size = getattr(message.photo, 'file_size', 0)
-    elif hasattr(message, 'audio') and message.audio:
-        file_size = message.audio.file_size
-    elif hasattr(message, 'animation') and message.animation:
-        file_size = message.animation.file_size
-
-    print(f"[DOWNLOAD] 文件大小: {file_size / 1024 / 1024:.1f} MB")
-
-    for attempt in range(max_retries):
-        try:
-            # 检查已下载的部分
-            downloaded_size = 0
-            if os.path.exists(target_path):
-                downloaded_size = os.path.getsize(target_path)
-                if downloaded_size >= file_size:
-                    print(f"[DOWNLOAD] 文件已完整下载: {downloaded_size} bytes")
-                    return target_path
-                print(f"[DOWNLOAD] 断点续传: 已下载 {downloaded_size / 1024 / 1024:.1f} MB，继续...")
-
-            # 使用 Pyrogram 的下载功能
-            # 添加进度回调
-            def progress(current, total):
-                if total > 0:
-                    pct = current / total * 100
-                    if current % (1024 * 1024 * 10) == 0:  # 每10MB打印一次
-                        print(f"[DOWNLOAD] 进度: {current / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB ({pct:.1f}%)")
-
-            result_path = client.download_media(
-                message,
-                file_name=target_path,
-                progress=progress
-            )
-
-            # 验证下载完整性
-            if result_path and os.path.exists(result_path):  # type: ignore[arg-type, union-attr]
-                final_size = os.path.getsize(result_path)  # type: ignore[arg-type, union-attr]
-                if file_size > 0 and final_size > 0 and final_size < file_size * 0.95:  # 允许5%误差
-                    print(f"[DOWNLOAD] 下载不完整: {final_size} / {file_size} bytes，重试...")
-                    continue
-                print(f"[DOWNLOAD] 下载完成: {final_size / 1024 / 1024:.1f} MB")
-                return result_path  # type: ignore[return-value]
-
-        except Exception as e:
-            print(f"[DOWNLOAD] 下载失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                print(f"[DOWNLOAD] 等待 {wait_time} 秒后重试...")
-                time.sleep(wait_time)
-
-    return None
-
-
-def _force_send_single_message(client: Client, target_channel_id: int, message: Message, download_dir: str | None = None) -> bool:
-    """强制发送单条消息（绕过转发限制）
-
-    使用下载-上传方式，支持断点续传和重试机制
-
-    Args:
-        client: Telegram 客户端
-        target_channel_id: 目标频道ID
-        message: 源消息
-        download_dir: 下载目录，默认为 ~/.tg-mgr/downloads/
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        caption = message.caption or ""
-
-        # 确定下载目录
-        if download_dir is None:
-            download_dir = _get_download_dir()
-
-        # 生成临时文件路径
-        # 根据媒体类型确定扩展名
-        ext = ""
-        if message.video:
-            ext = ".mp4"
-        elif message.document:
-            ext = os.path.splitext(message.document.file_name)[1] if message.document.file_name else ""
-        elif message.photo:
-            ext = ".jpg"
-        elif message.audio:
-            ext = ".mp3"
-        elif message.animation:
-            ext = ".gif"
-
-        temp_filename = f"force_forward_{message.chat.id}_{message.id}{ext}"
-        temp_path = os.path.join(download_dir, temp_filename)
-
-        # 下载（支持断点续传和重试）
-        downloaded_path = _download_with_resume(client, message, temp_path, max_retries=3)
-
-        if not downloaded_path or not os.path.exists(downloaded_path):
-            print("[FORWARD] 下载失败，无法发送")
-            return False
-
-        print(f"[FORWARD] 发送媒体: {downloaded_path}")
-
-        # 根据媒体类型发送（上传本地文件）
-        for attempt in range(3):
-            try:
-                if message.photo:
-                    client.send_photo(chat_id=target_channel_id, photo=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
-                elif message.video:
-                    client.send_video(chat_id=target_channel_id, video=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
-                elif message.document:
-                    client.send_document(chat_id=target_channel_id, document=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
-                elif message.animation:
-                    client.send_animation(chat_id=target_channel_id, animation=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
-                elif message.audio:
-                    client.send_audio(chat_id=target_channel_id, audio=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
-                elif message.voice:
-                    client.send_voice(chat_id=target_channel_id, voice=downloaded_path, caption=caption)  # type: ignore[unused-coroutine]
-                elif message.video_note:
-                    client.send_video_note(chat_id=target_channel_id, video_note=downloaded_path)  # type: ignore[unused-coroutine]
-                elif message.text:
-                    client.send_message(chat_id=target_channel_id, text=message.text)  # type: ignore[unused-coroutine]
-                else:
-                    return False
-
-                print("[FORWARD] 发送成功")
-                return True
-
-            except Exception as e:
-                print(f"[FORWARD] 发送失败 (尝试 {attempt + 1}/3): {e}")
-                if attempt < 2:
-                    wait_time = (attempt + 1) * 5
-                    print(f"[FORWARD] 等待 {wait_time} 秒后重试...")
-                    time.sleep(wait_time)
-
-        # 发送失败，保留文件以便下次续传
-        print(f"[FORWARD] 发送多次失败，文件保留在: {downloaded_path}")
-        return False
-
-    except Exception as e:
-        print(f"[FORWARD] 强制发送异常: {e}")
-        return False
-
-
-def _force_send_media_group(
-    client: Client, target_channel_id: int, messages: list[Message], download_dir: str | None = None
-) -> bool:
-    """强制发送媒体组（下载后重新上传，保持媒体组结构）
-
-    Args:
-        client: Telegram 客户端
-        target_channel_id: 目标频道ID
-        messages: 媒体组消息列表（按 message_id 排序）
-        download_dir: 下载目录，默认为 ~/.tg-mgr/downloads/
-
-    Returns:
-        True if successful, False otherwise
-    """
-    import shutil
-
-    if not messages:
-        return False
-
-    # 确定下载目录
-    if download_dir is None:
-        download_dir = _get_download_dir()
-
-    # 创建媒体组专用临时目录
-    group_id = messages[0].media_group_id  # type: ignore[attr-defined]
-    group_temp_dir = os.path.join(download_dir, f"force_group_{group_id}_{int(time.time())}")
-    os.makedirs(group_temp_dir, exist_ok=True)
-
-    downloaded_files: list[tuple[str, Message]] = []  # (file_path, message)
-
-    try:
-        # 按 message_id 排序确保顺序正确
-        messages = sorted(messages, key=lambda m: m.id)
-
-        # 第一步：下载所有媒体到本地
-        for i, msg in enumerate(messages):
-            # 确定文件扩展名
-            ext = ""
-            if msg.video:
-                ext = ".mp4"
-            elif msg.document:
-                ext = os.path.splitext(msg.document.file_name)[1] if msg.document.file_name else ""
-            elif msg.photo:
-                ext = ".jpg"
-            elif msg.animation:
-                ext = ".gif"
-
-            temp_filename = f"group_{msg.id}{ext}"
-            temp_path = os.path.join(group_temp_dir, temp_filename)
-
-            # 下载单个媒体（支持断点续传）
-            downloaded_path = _download_with_resume(client, msg, temp_path, max_retries=3)
-            if downloaded_path and os.path.exists(downloaded_path):
-                downloaded_files.append((downloaded_path, msg))
-                print(f"[DOWNLOAD] 媒体组 {i+1}/{len(messages)} 下载完成: {downloaded_path}")
-            else:
-                print(f"[DOWNLOAD] 媒体组 {i+1}/{len(messages)} 下载失败，跳过此消息")
-
-        if not downloaded_files:
-            print("[FORWARD] 媒体组所有文件下载失败")
-            return False
-
-        # 第二步：准备本地文件的 InputMedia 列表
-        media_list: list[InputMedia] = []
-        for file_path, msg in downloaded_files:
-            caption = msg.caption or ""
-            try:
-                # 根据媒体类型选择 InputMedia（使用本地文件路径）
-                if msg.photo:
-                    media_list.append(InputMediaPhoto(file_path, caption=caption))
-                elif msg.video:
-                    media_list.append(InputMediaVideo(file_path, caption=caption))
-                elif msg.document:
-                    media_list.append(InputMediaDocument(file_path, caption=caption))
-                elif msg.animation:
-                    media_list.append(InputMediaAnimation(file_path, caption=caption))
-                elif msg.audio:
-                    media_list.append(InputMediaAudio(file_path, caption=caption))
-            except Exception as e:
-                print(f"[FORWARD] 准备媒体失败: {e}")
-                continue
-
-        if not media_list:
-            print("[FORWARD] 媒体组无可发送的媒体")
-            return False
-
-        # 第三步：发送媒体组（使用本地文件）
-        print(f"[UPLOAD] 上传媒体组 ({len(media_list)} 条)...")
-        client.send_media_group(target_channel_id, media_list)  # type: ignore[unused-coroutine, arg-type]
-        print(f"[FORWARD] 媒体组强制转发成功 ({len(media_list)} 条)")
-        return True
-
-    except errors.FloodWait as e:
-        wait = max(e.value, 5)
-        print(f"[FORWARD] FloodWait: 等待 {wait} 秒...")
-        time.sleep(wait)
-        return False
-    except Exception as e:
-        print(f"[FORWARD] 媒体组强制转发失败: {e}")
-        return False
-    finally:
-        # 第四步：清理临时文件
-        try:
-            if os.path.exists(group_temp_dir):
-                shutil.rmtree(group_temp_dir)
-                print(f"[CLEANUP] 已清理临时目录: {group_temp_dir}")
-        except Exception as e:
-            print(f"[CLEANUP] 清理临时目录失败: {e}")
+from database import get_db
 
 
 def _build_stats_str(total: int, views: int, is_media_group: bool = False) -> str:
@@ -559,228 +39,15 @@ def _build_stats_str(total: int, views: int, is_media_group: bool = False) -> st
     return ""
 
 
-def message_exists_in_channel(client: Client, target_channel_id: int, source_msg_id: int) -> bool:
-    """检查消息是否已存在于目标频道"""
-    try:
-        for msg in client.get_chat_history(target_channel_id, limit=100):  # type: ignore[union-attr]
-            if msg.id == source_msg_id:
-                return True
-        return False
-    except Exception:
-        return False
+def _get_reaction_total(message):
+    """从消息中提取反应总数"""
+    from utils.media import extract_reaction_data
+    return extract_reaction_data(message).total
 
 
-def join_channel(client: Client, channel_id: int) -> bool:
-    """尝试加入频道"""
-    try:
-        client.join_chat(channel_id)  # type: ignore[unused-coroutine]
-        return True
-    except Exception:
-        pass
-
-    try:
-        chat = client.get_chat(channel_id)
-        if hasattr(chat, "username") and chat.username:
-            client.join_chat(f"https://t.me/{chat.username}")  # type: ignore[unused-coroutine]
-            return True
-    except Exception:
-        pass
-
-    return False
-
-
-def forward_messages_batch(
-    source_channel_id: int,
-    target_channel_ids: list[int],
-    messages: list[dict[str, Any]],
-    check_exists: bool = False,
-    force: bool = False,
-) -> tuple[int, int, int]:
-    """批量转发消息
-
-    Args:
-        source_channel_id: 源频道ID
-        target_channel_ids: 目标频道ID列表
-        messages: 要转发的消息列表
-        check_exists: 是否检查消息是否存在
-        force: 是否强制转发（忽略限制）
-
-    Returns:
-        (forwarded, skipped, failed)
-    """
-    log_file = get_log_path("forward.log")
-    write_date = not log_file.exists()
-
-    forwarded = 0
-    skipped = 0
-    failed = 0
-
-    with get_client("tg-mgr") as client:
-        # 确保已加入目标频道
-        for target_id in target_channel_ids:
-            try:
-                client.get_chat(target_id)
-            except Exception:
-                if join_channel(client, target_id):
-                    print(f"[FORWARD] 已加入目标频道 {target_id}")
-
-        for msg in messages:
-            msg_id = msg["message_id"]
-            # 检查是否是媒体组消息（提前设置，供后续复用）
-            try:
-                original_msg = _get_original_media_group_message(client, source_channel_id, msg_id)
-                msg["is_media_group"] = bool(original_msg and original_msg.media_group_id)
-            except Exception:
-                msg["is_media_group"] = False
-                original_msg = None
-
-            link = f"{get_channel_address(source_channel_id)}/{msg_id}"
-
-            # 获取文件大小用于进度显示（优先使用 DB 中预填充的值，避免依赖 Telegram API）
-            file_size = msg.get("file_size", 0)
-            if not file_size and original_msg:
-                try:
-                    # 尝试从 original_msg 获取文件大小
-                    if hasattr(original_msg, 'file_size') and original_msg.file_size:
-                        file_size = int(original_msg.file_size) if isinstance(original_msg.file_size, (int, float)) else 0
-                    elif hasattr(original_msg, 'photo') and original_msg.photo:
-                        photo_file_size = getattr(original_msg.photo, 'file_size', 0)
-                        file_size = int(photo_file_size) if isinstance(photo_file_size, (int, float)) else 0
-                    elif hasattr(original_msg, 'video') and original_msg.video:
-                        video_file_size = getattr(original_msg.video, 'file_size', 0)
-                        file_size = int(video_file_size) if isinstance(video_file_size, (int, float)) else 0
-                    elif hasattr(original_msg, 'document') and original_msg.document:
-                        doc_file_size = getattr(original_msg.document, 'file_size', 0)
-                        file_size = int(doc_file_size) if isinstance(doc_file_size, (int, float)) else 0
-                except Exception:
-                    file_size = 0
-
-            size_mb = file_size / 1024 / 1024 if file_size else 0
-            msg.get("is_media_group", False)
-
-            for target_id in target_channel_ids:
-                if check_exists:
-                    if message_exists_in_channel(client, target_id, msg_id):
-                        print(f"[FORWARD] 跳过（已存在）: {link} -> {target_id}")
-                        skipped += 1
-                        continue
-
-                try:
-                    # 检查是否是媒体组消息（已在循环开始时获取 original_msg）
-                    if original_msg and original_msg.media_group_id:
-                        # 媒体组消息，使用 send_media_group 转发
-                        media_group_msgs = _get_media_group_messages(client, source_channel_id, original_msg.media_group_id, msg_id)
-                        if media_group_msgs:
-                            # 有完整媒体组，转发整个组
-                            if size_mb > 0:
-                                print(f"[DOWNLOAD] 下载完成: {link} | {size_mb:.1f}MB")
-                            if _forward_media_group(client, source_channel_id, target_id, media_group_msgs):
-                                forwarded += 1
-                                total = msg.get("total", 0)
-                                views = msg.get("views", 0)
-                                stats = _build_stats_str(total, views, is_media_group=True)
-                                print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
-                            else:
-                                failed += 1
-                                continue
-                        else:
-                            # 媒体组消息但找不到其他同组消息，降级为 copy_message
-                            client.copy_message(
-                                chat_id=target_id,
-                                from_chat_id=source_channel_id,
-                                message_id=msg_id,
-                            )
-                            forwarded += 1
-                            total = msg.get("total", 0)
-                            views = msg.get("views", 0)
-                            stats = _build_stats_str(total, views, is_media_group=True)
-                            print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
-                    else:
-                        # 普通消息，使用 copy_message
-                        if size_mb > 0:
-                            print(f"[DOWNLOAD] 下载完成: {link} | {size_mb:.1f}MB")
-                        client.copy_message(
-                            chat_id=target_id,
-                            from_chat_id=source_channel_id,
-                            message_id=msg_id,
-                        )
-                        forwarded += 1
-                        total = msg.get("total", 0)
-                        views = msg.get("views", 0)
-                        stats = _build_stats_str(total, views)
-                        print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
-
-                    # 写入日志
-                    if write_date:
-                        from datetime import datetime
-                        with open(log_file, "w") as f:
-                            f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n")
-                        write_date = False
-                    with open(log_file, "a") as f:
-                        f.write(f"{link}\n")
-
-                except errors.Forbidden:
-                    print(f"[FORWARD] 频道 {target_id} 禁止复制")
-                    break
-                except errors.BadRequest as e:
-                    if "CHAT_ADMIN_REQUIRED" in str(e):
-                        print(f"[FORWARD] 频道 {target_id} 需要管理员权限")
-                        break
-                    if "CHAT_FORWARDS_RESTRICTED" in str(e):
-                        if force:
-                            # force 模式：下载后重新上传（保持媒体组结构）
-                            try:
-                                if original_msg and original_msg.media_group_id:
-                                    media_group_msgs = _get_media_group_messages(
-                                        client, source_channel_id, original_msg.media_group_id, msg_id
-                                    )
-                                    print(f"[DOWNLOAD] 下载完成: {link} ({len(media_group_msgs)} 条)")
-                                    print(f"[DOWNLOAD] 下载完成: {link} | {size_mb:.1f}MB (媒体组 {len(media_group_msgs)} 条)")
-                                    if media_group_msgs and _force_send_media_group(client, target_id, media_group_msgs):
-                                        forwarded += 1
-                                        total = msg.get("total", 0)
-                                        views = msg.get("views", 0)
-                                        stats = _build_stats_str(total, views, is_media_group=True)
-                                        print(f"[FORWARD] 强制转发成功: {link}{stats}")
-                                        continue
-                                    else:
-                                        failed += 1
-                                        continue
-                                else:
-                                    # 非媒体组消息，使用单条强制转发
-                                    if forward_single_message(client, source_channel_id, target_id, msg_id):
-                                        forwarded += 1
-                                        total = msg.get("total", 0)
-                                        views = msg.get("views", 0)
-                                        stats = _build_stats_str(total, views)
-                                        print(f"[FORWARD] 强制转发成功: {link}{stats}")
-                                        continue
-                                    else:
-                                        failed += 1
-                                        continue
-                            except Exception:
-                                failed += 1
-                                continue
-                        print(f"[FORWARD] 频道 {target_id} 禁止转发内容")
-                        break
-                    print(f"[FORWARD] 转发失败: {link} - {e}")
-                    failed += 1
-                except errors.FloodWait as e:
-                    wait = max(e.value, 5)
-                    print(f"[FORWARD] FloodWait: 等待 {wait} 秒...")
-                    time.sleep(wait)
-                    # 重试一次
-                    if forward_single_message(client, source_channel_id, target_id, msg_id):
-                        forwarded += 1
-                    else:
-                        failed += 1
-                except Exception as e:
-                    print(f"[FORWARD] 转发失败: {link} - {e}")
-                    failed += 1
-
-                time.sleep(0.5)
-
-    return forwarded, skipped, failed
+def get_channel_address(channel_id: int) -> str:
+    """获取频道链接地址，与 telegram_link.py 保持一致"""
+    return f"https://t.me/c/{abs(channel_id)}"
 
 
 def main():
@@ -792,14 +59,28 @@ def main():
     from modules.forward.preview import summarize_messages_for_forward, confirm_forward
     from modules.forward.recursive import sync_channel_for_forward, is_channel_forwarding_allowed, forward_with_recursion
     from modules.forward.recursive import find_messages_to_forward
+    from modules.forward.send import (
+        forward_single_message,
+        _get_original_media_group_message,
+        _get_media_group_messages,
+        _forward_media_group,
+        forward_messages_batch,
+        _build_stats_str,
+        get_channel_address as _get_channel_address,
+    )
+    from modules.forward.force import (
+        _force_send_single_message,
+        _force_send_media_group,
+    )
+    from database.query import VIEWS_THRESHOLD_MULTIPLIER
 
     parser = argparse.ArgumentParser(description="高反应消息转发模块")
     parser.add_argument("sources", nargs="+", help="源频道ID或消息链接")
     parser.add_argument("-o", "--target", type=int, help="目标频道ID")
     parser.add_argument("-c", "--check", action="store_true", help="转发前检查目标频道是否已存在")
     parser.add_argument(
-        "-r", "--depth", type=int, nargs="?", const=DEFAULT_RECURSION_DEPTH, default=None,
-        help=f"递归深度（-r3 或 -r 3，默认{DEFAULT_RECURSION_DEPTH}，0表示不递归）"
+        "-r", "--depth", type=int, nargs="?", const=5, default=None,
+        help="递归深度（-r3 或 -r 3，默认5，0表示不递归）"
     )
     parser.add_argument("-f", "--force", action="store_true",
         help="强制转发禁止转发的消息（通过复制内容而非转发）")
@@ -822,7 +103,7 @@ def main():
     default_views_limit = config.get("views_limit", 50)
 
     # 从配置读取递归深度（默认 5），-r 参数可覆盖
-    configured_depth = config.get("recursion_depth", DEFAULT_RECURSION_DEPTH)
+    configured_depth = config.get("recursion_depth", 5)
     recursion_depth = args.depth if args.depth is not None else configured_depth
 
     # 如果未指定 -r 参数且使用 -f，改为非递归模式（使用主数据库，与 info 保持一致）
@@ -859,7 +140,7 @@ def main():
             try:
                 client.get_chat(target_channel_id)
             except Exception:
-                if join_channel(client, target_channel_id):
+                if _join_channel(client, target_channel_id):
                     print(f"[FORWARD] 已加入目标频道 {target_channel_id}")
 
             for channel_id, msg_id, username in link_messages:
@@ -871,7 +152,7 @@ def main():
                         continue
                     channel_id = resolved_id
 
-                link = f"{get_channel_address(channel_id)}/{msg_id}"
+                link = f"{_get_channel_address(channel_id)}/{msg_id}"
                 try:
                     # 检查是否是媒体组消息
                     original_msg = _get_original_media_group_message(client, channel_id, msg_id)
@@ -888,7 +169,7 @@ def main():
                                     print(f"[FORWARD] 直接转发成功: {link}{stats}")
                                 else:
                                     print(f"[FORWARD] 直接转发失败(媒体组): {link}")
-                            except errors.BadRequest as e:
+                            except Exception as e:
                                 if "CHAT_FORWARDS_RESTRICTED" in str(e) and force:
                                     # force 模式：下载后重新上传（保持媒体组结构）
                                     if _force_send_media_group(client, target_channel_id, media_group_msgs):
@@ -899,7 +180,7 @@ def main():
                                     else:
                                         print(f"[FORWARD] 强制转发失败(媒体组): {link}")
                                 else:
-                                    raise
+                                    print(f"[FORWARD] 直接转发失败: {link} - {e}")
                         else:
                             # 媒体组消息但找不到其他同组消息，降级为重新发送
                             _force_send_single_message(client, target_channel_id, original_msg)
@@ -1046,9 +327,29 @@ def main():
                 return
 
 
-# 向后兼容别名
-def find_high_reaction_messages(channel_id: int, conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """向后兼容别名 - 使用 find_messages_to_forward"""
+def _join_channel(client: Client, channel_id: int) -> bool:
+    """尝试加入频道"""
+    from pyrogram import errors
+    try:
+        client.join_chat(channel_id)  # type: ignore[unused-coroutine]
+        return True
+    except Exception:
+        pass
+
+    try:
+        chat = client.get_chat(channel_id)
+        if hasattr(chat, "username") and chat.username:
+            client.join_chat(f"https://t.me/{chat.username}")  # type: ignore[unused-coroutine]
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+# 向后兼容别名 - 移到 recursive.py
+def find_high_reaction_messages(channel_id: int, conn) -> list:
+    """向后兼容别名"""
     from modules.forward.recursive import find_messages_to_forward as _find
     return _find(conn, channel_id)
 

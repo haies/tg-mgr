@@ -87,6 +87,27 @@ else:
 from pyrogram import Client, errors  # noqa: E402
 
 
+# 配置默认值（唯一的硬编码默认值来源）
+DEFAULT_CONFIG: dict = {
+    # 核心配置
+    "channel_id": None,
+    "download_dir": "~/Downloads/Telegram",
+    # 转发相关
+    "reaction_limit": 10,
+    "views_limit": 50,
+    "max_source_channels": 10,
+    "recursion_depth": 5,
+    # 清理相关
+    "filter_min_size": 1048576,      # 1MB
+    "filter_max_size": 1073741824,   # 1GB
+    # 重试相关
+    "max_retries": 5,
+    "retry_delay_base": 1,
+    # 媒体类型
+    "media_types": ["photo", "video", "document", "audio", "animation", "text", "video_note"],
+}
+
+
 def get_project_tmp_dir() -> Path:
     """获取项目 tmp 目录路径（默认在 ~/.tg-mgr/tmp）"""
     return get_config_dir() / "tmp"
@@ -166,14 +187,7 @@ def get_config() -> dict:
         with open(config_path, encoding="utf-8") as f:
             file_config = json.load(f)
             # 合并非敏感配置
-            for key in [
-                "forward_limit",
-                "reaction_limit",
-                "download_dir",
-                "max_retries",
-                "retry_delay_base",
-                "media_types",
-            ]:
+            for key in DEFAULT_CONFIG:
                 if key in file_config:
                     config[key] = file_config[key]
 

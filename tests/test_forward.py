@@ -181,7 +181,7 @@ class TestForceConfirmationNonRecursive:
              patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
              patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.preview.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.send.forward_messages_batch') as mock_forward, \
              patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             # Setup mocks
@@ -247,7 +247,7 @@ class TestForceConfirmationNonRecursive:
              patch('modules.forward.recursive.sync_channel_for_forward'), \
              patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
              patch('modules.forward.preview.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.send.forward_messages_batch') as mock_forward, \
              patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
@@ -278,7 +278,7 @@ class TestForceConfirmationNonRecursive:
              patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
              patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.preview.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.send.forward_messages_batch') as mock_forward, \
              patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()
@@ -347,7 +347,7 @@ class TestForceConfirmationRecursive:
              patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
              patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
              patch('modules.forward.preview.confirm_forward') as mock_confirm, \
-             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward_batch, \
+             patch('modules.forward.send.forward_messages_batch') as mock_forward_batch, \
              patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 10}):
 
             mock_client = MagicMock()
@@ -491,7 +491,7 @@ class TestForwardForceFlagConfirmation:
              patch('modules.forward.forward_core.get_db') as mock_get_db, \
              patch('modules.forward.recursive.find_messages_to_forward') as mock_find, \
              patch('modules.forward.preview.summarize_messages_for_forward') as mock_summarize, \
-             patch('modules.forward.forward_core.forward_messages_batch') as mock_forward, \
+             patch('modules.forward.send.forward_messages_batch') as mock_forward, \
              patch('modules.forward.forward_core.get_config', return_value={"recursion_depth": 0}):
 
             mock_client = MagicMock()

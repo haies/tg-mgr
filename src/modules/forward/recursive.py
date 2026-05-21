@@ -13,8 +13,8 @@ from utils.telegram_client import get_client
 
 logger = logging.getLogger(__name__)
 
-# 导入 forward_messages_batch（延迟导入避免循环依赖）
-from modules.forward.forward_core import forward_messages_batch
+# 导入 forward_messages_batch（从 send.py）
+from modules.forward.send import forward_messages_batch
 
 
 def find_messages_to_forward(
