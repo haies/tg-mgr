@@ -103,6 +103,7 @@ def insert_messages(
                     json.dumps({"positive": reaction.positive, "heart": reaction.heart, "total": reaction.total}),
                     source_id,
                     media_info.views,
+                    media_info.media_group_id,
                 )
             )
             seen_files.add(media_info.file_unique_id)
@@ -123,16 +124,16 @@ def insert_messages(
     if new_files:
         try:
             cursor.executemany(
-                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, views) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, views, media_group_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 new_files,
             )
         except sqlite3.IntegrityError:
             for new_file in new_files:
                 try:
                     cursor.execute(
-                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, views) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO messages (message_id, file_unique_id, file_size, media_type, caption, is_duplicate, is_valid, reactions, source_id, views, media_group_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         new_file,
                     )
                 except sqlite3.IntegrityError:
