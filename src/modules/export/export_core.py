@@ -1,34 +1,11 @@
-"""
-归档导出模块
-
-功能：
-1. 导出频道消息为 Telegram Desktop 格式的 JSON 和 HTML
-2. 实际下载媒体文件到本地，支持离线查看
-3. 支持断点续传（消息级别 + 文件级别）
-4. 导出目录格式：{下载目录}/{频道名称}_YYYY-MM-DD_HH-MM-SS/
-
-使用：
-- 默认导出（使用 config.json 中的 channel_id）: PYTHONPATH=. python modules/export.py
-- 指定频道导出: PYTHONPATH=. python modules/export.py -1001234567890
-
-输出：
-- messages.json: Telegram Desktop 格式的消息元数据
-- messages.html: Telegram Desktop 风格的可视化存档
-- photos/: 下载的图片文件
-- videos/: 下载的视频文件
-- files/: 下载的文档文件
-- voice/: 下载的语音消息
-- stickers/: 下载的表情包
-"""
-
-import argparse
+"""导出核心逻辑"""
 import json
 import logging
-import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from string import Template
 
 from pyrogram import Client, errors, types
 
@@ -36,63 +13,9 @@ from utils.file_sanitizer import sanitize_filename
 from utils.telegram_client import create_client, get_config
 from utils.telegram_link import generate_tg_link
 
+from .template import load_html_template
+
 logger = logging.getLogger(__name__)
-
-
-def parse_export_args(args: list) -> argparse.Namespace:
-    """解析导出命令参数
-
-    支持：
-    - 频道ID（如 -1001234567890 或 1234567890）
-    - 消息地址（如 https://t.me/c/1234567890/100）
-    - 混合输入
-
-    Args:
-        args: 命令行参数列表
-
-    Returns:
-        Namespace包含 channel_ids 和 message_ids
-    """
-    parser = argparse.ArgumentParser(
-        description="Telegram 频道导出工具", usage="./tg export [channel_id|message_url]..."
-    )
-    parser.add_argument("channels", nargs="*", help="频道ID或消息地址，多个输入用空格分隔")
-
-    parsed = parser.parse_args(args)
-
-    channel_ids = []
-    message_ids = []
-
-    for input_str in parsed.channels:
-        # 判断是消息地址还是频道ID
-        if input_str.startswith("https://t.me/c/") or input_str.startswith("http://t.me/c/"):
-            # 解析消息地址: https://t.me/c/{channel_id}/{message_id}
-            # 注意：t.me/c/{chat_id} 中的 chat_id 需要加上 -100 前缀才是完整的频道 ID
-            match = re.match(r"https?://t\.me/c/(\d+)/(\d+)", input_str)
-            if match:
-                channel_ids.append(f"-100{match.group(1)}")
-                message_ids.append(int(match.group(2)))
-            else:
-                # 地址格式不正确，作为频道ID处理
-                channel_ids.append(input_str)
-        elif input_str.startswith("-100"):
-            # 带-100前缀的频道ID
-            channel_ids.append(input_str)
-        elif input_str.lstrip("-").isdigit():
-            # 纯数字频道ID（可能带负号）
-            channel_ids.append(input_str)
-        else:
-            # 其他格式，作为频道ID处理
-            channel_ids.append(input_str)
-
-    # 如果没有传入参数，使用配置文件中的默认频道
-    if not channel_ids:
-        config = get_config()
-        default_channel = config.get("channel_id")
-        if default_channel:
-            channel_ids = [str(default_channel)]
-
-    return argparse.Namespace(channel_ids=channel_ids, message_ids=message_ids)
 
 
 # ============ 状态管理（断点续传） ============
@@ -139,16 +62,6 @@ class ExportState:
     def mark_file_downloaded(self, file_unique_id: str, file_path: str):
         """标记文件已下载"""
         self.state["downloaded_files"][file_unique_id] = file_path
-
-
-# ============ HTML 模板加载 ============
-def load_html_template() -> str:
-    """加载 HTML 模板文件"""
-    template_path = Path(__file__).parent / "export.template.html"
-    if not template_path.exists():
-        raise FileNotFoundError(f"HTML 模板文件不存在: {template_path}")
-    with open(template_path, encoding="utf-8") as f:
-        return f.read()
 
 
 # ============ Telegram Desktop 格式 JSON 导出 ============
@@ -277,8 +190,6 @@ def export_html_telegram_desktop_style(messages: list[dict], channel_info: dict,
         messages_html_parts.append(msg_html)
 
     # 使用 string.Template 的 safe_substitute 避免缺失占位符导致 KeyError
-    from string import Template
-
     html_content = Template(html_template).safe_substitute(
         channel_name=channel_info.get("title", "Unknown Channel"),
         message_count=len(messages),
@@ -728,6 +639,8 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
 
 def main():
     """主执行流程"""
+    from .cli import parse_export_args
+
     args = parse_export_args(sys.argv[1:])
 
     if not args.channel_ids:
@@ -752,7 +665,3 @@ def main():
     except Exception as e:
         print(f"[ERROR] 导出失败: {e}")
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

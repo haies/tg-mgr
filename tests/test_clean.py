@@ -81,9 +81,9 @@ class TestRunDeduplicate:
         """测试无重复时不执行删除"""
         from modules.clean import run_deduplicate
 
-        with patch('modules.clean.get_config') as mock_config, \
-             patch('modules.clean.get_db') as mock_get_db, \
-             patch('modules.clean.find_duplicates') as mock_find:
+        with patch('modules.clean.deduplicate.get_config') as mock_config, \
+             patch('modules.clean.deduplicate.get_db') as mock_get_db, \
+             patch('modules.clean.deduplicate.find_duplicates') as mock_find:
 
             mock_config.return_value = {
                 'api_id': 12345,
@@ -106,9 +106,9 @@ class TestRunDeduplicate:
         """测试检测模式（不删除）"""
         from modules.clean import run_deduplicate
 
-        with patch('modules.clean.get_config') as mock_config, \
-             patch('modules.clean.get_db') as mock_get_db, \
-             patch('modules.clean.find_duplicates') as mock_find:
+        with patch('modules.clean.deduplicate.get_config') as mock_config, \
+             patch('modules.clean.deduplicate.get_db') as mock_get_db, \
+             patch('modules.clean.deduplicate.find_duplicates') as mock_find:
 
             mock_config.return_value = {
                 'api_id': 12345,
@@ -134,9 +134,9 @@ class TestRunDeinvalid:
         """测试无无效消息时的情况"""
         from modules.clean import run_deinvalid
 
-        with patch('modules.clean.get_config') as mock_config, \
-             patch('modules.clean.get_db') as mock_get_db, \
-             patch('modules.clean.find_invalid_messages') as mock_find:
+        with patch('modules.clean.cleanup.get_config') as mock_config, \
+             patch('modules.clean.cleanup.get_db') as mock_get_db, \
+             patch('modules.clean.cleanup.find_invalid_messages') as mock_find:
 
             mock_config.return_value = {
                 'api_id': 12345,
