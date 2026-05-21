@@ -78,7 +78,7 @@ All modules use `channels` as positional parameter. Use `tg <module> --help` for
 ### clean - Sync & Cleanup
 
 ```bash
-tg clean                          # Sync default channel
+tg clean                          # Sync channel from TG_CHANNEL_ID env var
 tg clean -d                       # Sync + deduplicate
 tg clean -i                       # Sync + cleanup invalid
 tg clean -s                       # Sync + cleanup junk
@@ -89,6 +89,8 @@ tg clean -R                       # Force reset database and re-sync
 tg clean -u                       # Force sync (breakpoint resume)
 tg clean <channel1> <channel2>    # Multi-channel cleanup
 ```
+
+**Channel Source:** When no channel is provided, reads from `TG_CHANNEL_ID` environment variable (or `channel_id` in config.json).
 
 **Junk Message Detection:**
 - Media (photo/video) + long text (>30 Chinese or >100 chars) + file <2MB
@@ -102,7 +104,7 @@ tg clean <channel1> <channel2>    # Multi-channel cleanup
 ### filter - Media Size Filter
 
 ```bash
-tg filter                        # Use channel_id from config
+tg filter                        # Use channel_id from TG_CHANNEL_ID env or config
 tg filter <channel_id>           # Specify channel
 tg filter -m 1048576             # Min size: larger than 1MB
 tg filter -M 1073741824          # Max size: smaller than 1GB
@@ -128,11 +130,13 @@ Features: Telegram Desktop format, media download, resume support, incremental e
 
 ```bash
 tg info                          # List all accessible channels
-tg info <channel_id>             # Analyze specific channel
+tg info <channel_id>             # Analyze specific channel (from config if omitted)
 tg info <channel_id> -R          # Force reset and re-sync
 tg info <channel_id> -l 20        # Top 20 high-reaction messages
 tg info <channel_id> -v 50       # Top 50 high-views messages
 ```
+
+**Channel Source:** When no channel is provided, reads from `TG_CHANNEL_ID` env var or `channel_id` in config.json. If neither set, lists all accessible channels.
 
 **Analysis Output:**
 - Forward sources: where messages are forwarded from (top N by message count)
