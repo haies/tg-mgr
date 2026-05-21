@@ -11,7 +11,7 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 # 模块级导入（支持测试 patch）
-from utils.telegram_client import DEFAULT_CONFIG, get_client, get_config
+from utils.telegram_client import DEFAULT_CONFIG, get_client, get_config, get_config_value
 from modules.sync import sync_channel
 from database import get_db
 
@@ -98,12 +98,12 @@ def main():
         sys.exit(1)
 
     # 从配置读取默认值（程序传入的参数可覆盖）
-    default_reaction_limit = config.get("reaction_limit") if config.get("reaction_limit") is not None else DEFAULT_CONFIG["reaction_limit"]
-    default_views_limit = config.get("views_limit") if config.get("views_limit") is not None else DEFAULT_CONFIG["views_limit"]
-    default_max_source_channels = config.get("max_source_channels", default_reaction_limit)
+    default_reaction_limit = get_config_value("reaction_limit")
+    default_views_limit = get_config_value("views_limit")
+    default_max_source_channels = get_config_value("max_source_channels", get_config_value("reaction_limit"))
 
     # 从配置读取递归深度（默认 None=不递归），-r 参数可覆盖
-    configured_depth = config.get("recursion_depth") if config.get("recursion_depth") is not None else DEFAULT_CONFIG["recursion_depth"]
+    configured_depth = get_config_value("recursion_depth")
     recursion_depth = args.depth if args.depth is not None else configured_depth
 
     # 如果未指定 -r 参数且使用 -f，改为非递归模式（与 info 保持一致）

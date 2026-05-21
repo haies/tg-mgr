@@ -252,6 +252,35 @@ def get_client(session_name: str = "tg-mgr") -> Client:
     )
 
 
+def get_config_value(key: str, default=None, config: dict = None):
+    """
+    统一配置读取函数
+
+    规则：
+    1. config.json 中的 None 值视为"未设置"（允许配置 0）
+    2. 只有 key 不存在时才使用 default
+    3. 默认值从 DEFAULT_CONFIG 获取
+
+    Args:
+        key: 配置键名
+        default: 备用默认值（当 DEFAULT_CONFIG 中也没有时）
+        config: 可选，传入已有的 config dict
+
+    Returns:
+        配置值或默认值
+    """
+    if config is None:
+        config = get_config()
+
+    if key in config and config[key] is not None:
+        return config[key]
+
+    if key in DEFAULT_CONFIG:
+        return DEFAULT_CONFIG[key]
+
+    return default
+
+
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 1.0):
     """FloodWait 重试装饰器
 

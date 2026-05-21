@@ -18,7 +18,7 @@ import argparse
 
 from database import get_db
 from database.query import find_large_media
-from utils.telegram_client import DEFAULT_CONFIG, get_config
+from utils.telegram_client import DEFAULT_CONFIG, get_config, get_config_value
 from utils.telegram_link import generate_tg_link
 
 
@@ -34,8 +34,8 @@ def main():
     config = get_config()
 
     # 从config读取默认值（CLI参数可覆盖）
-    default_min_size = config.get("filter_min_size") if config.get("filter_min_size") is not None else DEFAULT_CONFIG["filter_min_size"]
-    default_max_size = config.get("filter_max_size") if config.get("filter_max_size") is not None else DEFAULT_CONFIG["filter_max_size"]
+    default_min_size = get_config_value("filter_min_size")
+    default_max_size = get_config_value("filter_max_size")
 
     min_size = args.min_size if args.min_size is not None else default_min_size
     max_size = args.max_size if args.max_size is not None else default_max_size
