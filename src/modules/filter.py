@@ -18,30 +18,43 @@ import argparse
 
 from database import get_db
 from database.query import find_large_media
-from utils.telegram_client import get_config
+from utils.telegram_client import DEFAULT_CONFIG, get_config
 from utils.telegram_link import generate_tg_link
 
 
 def main():
     parser = argparse.ArgumentParser(description="Telegram媒体文件过滤工具")
-    parser.add_argument("--min-size", type=int, default=1048576, help="最小文件大小(字节)，默认1MB")
+    parser.add_argument("--min-size", type=int, default=None, help="最小文件大小(字节)，默认1MB")
     parser.add_argument(
-        "--max-size", type=int, default=1073741824, help="最大文件大小(字节)，默认1GB"
+        "--max-size", type=int, default=None, help="最大文件大小(字节)，默认1GB"
     )
     args = parser.parse_args()
 
-    if args.min_size >= args.max_size:
+    config = get_config()
+
+    # 从config读取默认值（CLI参数可覆盖）
+    default_min_size = config.get("filter_min_size") or DEFAULT_CONFIG["filter_min_size"]
+    default_max_size = config.get("filter_max_size") or DEFAULT_CONFIG["filter_max_size"]
+
+    min_size = args.min_size if args.min_size is not None else default_min_size
+    max_size = args.max_size if args.max_size is not None else default_max_size
+
+    if min_size >= max_size:
         print("[ERROR] --min-size 必须小于 --max-size")
         return
 
     config = get_config()
-    channel_id = config["channel_id"]
+    channel_id = config.get("channel_id")
+
+    if not channel_id:
+        print("[ERROR] 未配置默认频道 channel_id")
+        return
 
     with get_db() as conn:
-        results = find_large_media(conn, args.min_size, args.max_size)
+        results = find_large_media(conn, min_size, max_size)
 
     if not results:
-        print(f"[FILTER] 未找到大小超出范围({args.min_size}~{args.max_size}字节)的媒体")
+        print(f"[FILTER] 未找到大小超出范围({min_size}~{max_size}字节)的媒体")
         return
 
     # 按媒体类型分组
