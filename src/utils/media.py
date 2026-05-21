@@ -52,12 +52,14 @@ def extract_media_info(message: types.Message) -> MediaInfo:
                 file_size=largest_photo.file_size,
                 media_type="photo",
                 views=views,
+                media_group_id=getattr(message, "media_group_id", None),
             )
         return MediaInfo(
             file_unique_id=message.photo.file_unique_id,
             file_size=message.photo.file_size,
             media_type="photo",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.video:
         return MediaInfo(
@@ -65,6 +67,7 @@ def extract_media_info(message: types.Message) -> MediaInfo:
             file_size=message.video.file_size,
             media_type="video",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.document:
         return MediaInfo(
@@ -72,6 +75,7 @@ def extract_media_info(message: types.Message) -> MediaInfo:
             file_size=message.document.file_size,
             media_type="document",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.audio:
         return MediaInfo(
@@ -79,6 +83,7 @@ def extract_media_info(message: types.Message) -> MediaInfo:
             file_size=message.audio.file_size,
             media_type="audio",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.animation:
         return MediaInfo(
@@ -86,6 +91,7 @@ def extract_media_info(message: types.Message) -> MediaInfo:
             file_size=message.animation.file_size,
             media_type="animation",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.voice:
         return MediaInfo(
@@ -93,6 +99,7 @@ def extract_media_info(message: types.Message) -> MediaInfo:
             file_size=message.voice.file_size,
             media_type="voice",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.video_note:
         return MediaInfo(
@@ -100,11 +107,12 @@ def extract_media_info(message: types.Message) -> MediaInfo:
             file_size=message.video_note.file_size,
             media_type="video_note",
             views=views,
+            media_group_id=getattr(message, "media_group_id", None),
         )
     elif message.text:
-        return MediaInfo(file_unique_id="", file_size=None, media_type="text", views=views)
+        return MediaInfo(file_unique_id="", file_size=None, media_type="text", views=views, media_group_id=getattr(message, "media_group_id", None))
     else:
-        return MediaInfo(file_unique_id="", file_size=None, media_type="other", views=views)
+        return MediaInfo(file_unique_id="", file_size=None, media_type="other", views=views, media_group_id=getattr(message, "media_group_id", None))
 
 
 def extract_reaction_data(message: types.Message) -> ReactionData:
