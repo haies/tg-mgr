@@ -117,40 +117,40 @@ def main():
     from modules.sync import force_reset_database
 
     parser = argparse.ArgumentParser(description="Telegram 频道信息分析工具")
-    parser.add_argument(
-        "channel_id", nargs="?", type=int, help="频道ID（可选，不填则列出所有频道）"
-    )
+    parser.add_argument("channels", nargs="+", help="频道ID（支持多个）")
     parser.add_argument(
         "-R", "--reset", action="store_true", help="强制重置数据库并重新同步（获取所有历史消息）"
     )
-    parser.add_argument("-l", "--limit", type=int, dest="reaction_limit", help="高反应消息数量限制（可选）")
-    parser.add_argument("-v", "--views-limit", type=int, dest="views_limit", help="高浏览量消息数量限制（可选）")
+    parser.add_argument("-l", "--limit", type=int, dest="reaction_limit", help="高反应消息数量限制")
+    parser.add_argument("-v", "--views-limit", type=int, dest="views_limit", help="高浏览量消息数量限制")
 
     args = parser.parse_args()
 
-    if args.channel_id is None:
+    if not args.channels:
         # 无参数模式
         for dialog in list_all_dialogs():
             print(f"{dialog['name']}\t{dialog['id']}\t{dialog['address']}")
     else:
-        # 指定频道ID模式
+        # 指定频道ID模式（使用第一个频道）
+        channel_id = args.channels[0]
+
         # 强制重置模式：删除数据库并重新同步
         if args.reset:
             force_reset_database()
 
-        result = analyze_channel(args.channel_id, reaction_limit=args.reaction_limit, views_limit=args.views_limit)
+        result = analyze_channel(channel_id, reaction_limit=args.reaction_limit, views_limit=args.views_limit)
         print(f"\n转发来源TOP ({len(result['forward_sources'])}):")
         for item in result["forward_sources"]:
             print(f"{item['name']}\t{item['id']}\t{item['address']}\t{item['count']}")
 
         print(f"\n浏览量TOP ({len(result['top_views'])}):")
         for item in result["top_views"]:
-            message_address = f"{get_channel_address(args.channel_id)}/{item['message_id']}"
+            message_address = f"{get_channel_address(channel_id)}/{item['message_id']}"
             print(f"{item['views']}\t{message_address}")
 
         print(f"\n高反应消息TOP ({len(result['reactions'])}):")
         for item in result["reactions"]:
-            message_address = f"{get_channel_address(args.channel_id)}/{item['message_id']}"
+            message_address = f"{get_channel_address(channel_id)}/{item['message_id']}"
             print(f"总计: {item['total']}\t{message_address}")
 
 

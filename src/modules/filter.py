@@ -24,9 +24,10 @@ from utils.telegram_link import generate_tg_link
 
 def main():
     parser = argparse.ArgumentParser(description="Telegram媒体文件过滤工具")
-    parser.add_argument("-m", "--min-size", type=int, default=None, help="最小文件大小(字节)，默认1MB")
+    parser.add_argument("channel", nargs="?", type=int, help="频道ID（可选，不填则使用配置文件中的默认值）")
+    parser.add_argument("-m", "--min-size", type=int, default=None, help="最小文件大小(字节)")
     parser.add_argument(
-        "-M", "--max-size", type=int, default=None, help="最大文件大小(字节)，默认1GB"
+        "-M", "--max-size", type=int, default=None, help="最大文件大小(字节)"
     )
     args = parser.parse_args()
 
@@ -43,7 +44,8 @@ def main():
         print("[ERROR] --min-size 必须小于 --max-size")
         return
 
-    channel_id = config.get("channel_id")
+    # 优先使用CLI参数，其次使用config中的值
+    channel_id = args.channel if args.channel is not None else config.get("channel_id")
 
     if not channel_id:
         print("[ERROR] 未配置默认频道 channel_id")
