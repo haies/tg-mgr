@@ -387,7 +387,7 @@ def forward_messages_batch(
                         if media_group_msgs:
                             # 有完整媒体组，转发整个组
                             if size_mb > 0:
-                                print(f"[DOWNLOAD] 下载完成: {link} | {size_mb:.1f}MB")
+                                print(f"[UPLOAD] 媒体组: {link} | {size_mb:.1f}MB")
                             if _forward_media_group(client, source_channel_id, target_id, media_group_msgs):
                                 forwarded += 1
                                 total = msg.get("total", 0)
@@ -411,8 +411,6 @@ def forward_messages_batch(
                             print(f"[FORWARD] 转发成功: {link} -> {target_id}{stats}")
                     else:
                         # 普通消息，使用 copy_message
-                        if size_mb > 0:
-                            print(f"[DOWNLOAD] 下载完成: {link} | {size_mb:.1f}MB")
                         client.copy_message(
                             chat_id=target_id,
                             from_chat_id=source_channel_id,
