@@ -115,9 +115,10 @@ def main():
     import argparse
 
     from modules.sync import force_reset_database
+    from utils.telegram_client import get_config
 
     parser = argparse.ArgumentParser(description="Telegram 频道信息分析工具")
-    parser.add_argument("channels", nargs="+", help="频道ID（支持多个）")
+    parser.add_argument("channels", nargs="*", help="频道ID（支持多个，不填则使用配置文件中的频道或列出所有）")
     parser.add_argument(
         "-R", "--reset", action="store_true", help="强制重置数据库并重新同步（获取所有历史消息）"
     )
@@ -126,13 +127,26 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.channels:
-        # 无参数模式
+    # 确定频道列表
+    if args.channels:
+        # 命令行指定了频道
+        channels = args.channels
+    else:
+        # 未指定频道，尝试从配置读取
+        config = get_config()
+        channel_id = config.get("channel_id")
+        if channel_id:
+            channels = [channel_id]
+        else:
+            channels = None
+
+    if not channels:
+        # 无有效频道，列出所有可访问的会话
         for dialog in list_all_dialogs():
             print(f"{dialog['name']}\t{dialog['id']}\t{dialog['address']}")
     else:
         # 指定频道ID模式（使用第一个频道）
-        channel_id = args.channels[0]
+        channel_id = channels[0]
 
         # 强制重置模式：删除数据库并重新同步
         if args.reset:
