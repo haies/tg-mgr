@@ -619,7 +619,7 @@ def find_top_messages(
         if "source_id" not in msg:
             msg["source_id"] = source_id_map.get(msg["message_id"]) or source_id
 
-    return merged
+    return _deduplicate_media_groups(merged)
 
 
 def find_forward_sources_by_channel(
