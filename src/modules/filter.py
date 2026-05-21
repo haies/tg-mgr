@@ -16,7 +16,7 @@ python modules/filter.py --min-size 1048576 --max-size 1073741824
 
 import argparse
 
-from database import get_db_connection
+from database import get_db
 from database.query import find_large_media
 from utils.telegram_client import get_config
 from utils.telegram_link import generate_tg_link
@@ -37,9 +37,8 @@ def main():
     config = get_config()
     channel_id = config["channel_id"]
 
-    conn = get_db_connection()
-    results = find_large_media(conn, args.min_size, args.max_size)
-    conn.close()
+    with get_db() as conn:
+        results = find_large_media(conn, args.min_size, args.max_size)
 
     if not results:
         print(f"[FILTER] 未找到大小超出范围({args.min_size}~{args.max_size}字节)的媒体")
