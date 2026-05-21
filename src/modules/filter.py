@@ -33,8 +33,8 @@ def main():
     config = get_config()
 
     # 从config读取默认值（CLI参数可覆盖）
-    default_min_size = config.get("filter_min_size") or DEFAULT_CONFIG["filter_min_size"]
-    default_max_size = config.get("filter_max_size") or DEFAULT_CONFIG["filter_max_size"]
+    default_min_size = config.get("filter_min_size") if config.get("filter_min_size") is not None else DEFAULT_CONFIG["filter_min_size"]
+    default_max_size = config.get("filter_max_size") if config.get("filter_max_size") is not None else DEFAULT_CONFIG["filter_max_size"]
 
     min_size = args.min_size if args.min_size is not None else default_min_size
     max_size = args.max_size if args.max_size is not None else default_max_size

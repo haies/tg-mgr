@@ -34,13 +34,9 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None, views_li
     """分析指定频道数据"""
     config = get_config()
     # max_source_channels 优先，兼容旧 forward_limit 配置名
-    max_source_channels = config.get("max_source_channels") or config.get("forward_limit") or DEFAULT_CONFIG["max_source_channels"]
-    reaction_limit = (
-        reaction_limit if reaction_limit is not None else config.get("reaction_limit") or DEFAULT_CONFIG["reaction_limit"]
-    )
-    views_limit = (
-        views_limit if views_limit is not None else config.get("views_limit") or DEFAULT_CONFIG["views_limit"]
-    )
+    max_source_channels = config.get("max_source_channels") if config.get("max_source_channels") is not None else (config.get("forward_limit") if config.get("forward_limit") is not None else DEFAULT_CONFIG["max_source_channels"])
+    reaction_limit = reaction_limit if reaction_limit is not None else (config.get("reaction_limit") if config.get("reaction_limit") is not None else DEFAULT_CONFIG["reaction_limit"])
+    views_limit = views_limit if views_limit is not None else (config.get("views_limit") if config.get("views_limit") is not None else DEFAULT_CONFIG["views_limit"])
 
     from modules.sync import sync_channel
 
