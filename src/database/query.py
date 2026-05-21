@@ -134,7 +134,7 @@ def find_reaction_messages_over_threshold(
 
 def find_reaction_messages_above_multiplier(
     conn: sqlite3.Connection,
-    multiplier: float = 6,
+    multiplier: float = 5,
     limit: int = 200,
     source_id: int | None = None,
 ) -> list[tuple[int, int, int, int, int | None, int | None]]:
@@ -148,7 +148,7 @@ def find_reaction_messages_above_multiplier(
 
     Args:
         conn: 数据库连接
-        multiplier: 倍数（默认6，即 > 6 * avg）
+        multiplier: 倍数（默认5，即 > 5 * avg）
         limit: 返回条数上限
         source_id: 可选，按来源频道ID过滤
 
@@ -507,7 +507,7 @@ def find_reaction_messages_for_display(
     conn: sqlite3.Connection,
     reaction_limit: int = 200,
     source_id: int | None = None,
-    reaction_threshold_multiplier: float = 6,
+    reaction_threshold_multiplier: float = 5,
 ) -> list[dict[str, Any]]:
     """
     统一的"高反应消息查询"逻辑（info.py 和 forward.py 共用）
@@ -522,7 +522,7 @@ def find_reaction_messages_for_display(
         conn: 数据库连接
         reaction_limit: 高反应消息数量限制
         source_id: 可选，按来源频道ID过滤（用于 forward 模块指定源频道）
-        reaction_threshold_multiplier: 倍数（默认6，即 > 6 * avg）
+        reaction_threshold_multiplier: 倍数（默认5，即 > 5 * avg）
 
     Returns:
         消息列表，每条消息包含 message_id, positive, heart, total, views, source_id, media_type
@@ -544,8 +544,8 @@ def find_top_messages(
     reaction_limit: int = 200,
     views_limit: int = 100,
     source_id: int | None = None,
-    reaction_threshold_multiplier: float = 6,
-    views_threshold_multiplier: float = 5,
+    reaction_threshold_multiplier: float = 5,
+    views_threshold_multiplier: float = 8,
 ) -> list[dict[str, Any]]:
     """
     统一的高反应+高浏览TOP查询（info.py 和 forward.py 共用）
@@ -562,8 +562,8 @@ def find_top_messages(
         reaction_limit: 高反应消息数量限制
         views_limit: 高浏览量消息数量限制
         source_id: 可选，按来源频道ID过滤
-        reaction_threshold_multiplier: 反应数倍数（默认6）
-        views_threshold_multiplier: 浏览量倍数（默认5）
+        reaction_threshold_multiplier: 反应数倍数（默认5）
+        views_threshold_multiplier: 浏览量倍数（默认7）
 
     Returns:
         消息列表，每条消息包含 message_id, positive, heart, total, views, source_id, media_type, msg_type
@@ -651,3 +651,22 @@ def find_forward_sources_by_channel(
         (channel_id, limit),
     )
     return cursor.fetchall()
+
+
+def _deduplicate_media_groups(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一媒体组只保留一条（反应最高的）"""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for msg in messages:
+        mg_id = msg.get("media_group_id")
+        if mg_id:
+            groups.setdefault(mg_id, []).append(msg)
+        else:
+            groups.setdefault(f"_nomedia_{id(msg)}", []).append(msg)
+
+    result: list[dict[str, Any]] = []
+    for mg_id, msgs in groups.items():
+        if mg_id.startswith("_nomedia_"):
+            result.extend(msgs)
+        else:
+            result.append(max(msgs, key=lambda m: m.get("total", 0)))
+    return result
