@@ -195,15 +195,17 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
 
 
 def _force_send_media_group(
-    client: Client, target_channel_id: int, messages: list[Message], download_dir: str | None = None
+    client: Client, target_channel_id: int, messages: list[Message] | list[int],
+    download_dir: str | None = None, source_channel_id: int | None = None
 ) -> bool:
     """强制发送媒体组（下载后重新上传，保持媒体组结构）
 
     Args:
         client: Telegram 客户端
         target_channel_id: 目标频道ID
-        messages: 媒体组消息列表（按 message_id 排序）
+        messages: 媒体组消息列表（按 message_id 排序），可以是 Message 对象列表或 message_id 列表
         download_dir: 下载目录，默认为 ~/.tg-mgr/downloads/
+        source_channel_id: 源频道ID（当 messages 是 message_id 列表时必须提供）
 
     Returns:
         True if successful, False otherwise
@@ -216,6 +218,21 @@ def _force_send_media_group(
     # 确定下载目录
     if download_dir is None:
         download_dir = _get_download_dir()
+
+    # 如果传入的是 message_id 列表，需要先获取 Message 对象
+    if messages and isinstance(messages[0], int):
+        # message_id 列表：需要获取 Message 对象
+        if source_channel_id is None:
+            print("[FORWARD] _force_send_media_group 需要 source_channel_id 参数")
+            return False
+        message_ids = messages  # type: ignore[assignment]
+        try:
+            # 批量获取消息对象
+            fetched_messages = client.get_messages(source_channel_id, message_ids)  # type: ignore[union-attr]
+            messages = [m for m in fetched_messages if m]  # type: ignore[assignment]
+        except Exception as e:
+            print(f"[FORWARD] 获取媒体组消息失败: {e}")
+            return False
 
     # 创建媒体组专用临时目录
     group_id = messages[0].media_group_id  # type: ignore[attr-defined]
