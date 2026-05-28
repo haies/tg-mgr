@@ -20,7 +20,8 @@ WITH reaction_messages AS (
         channel_id,
         views,
         media_group_id,
-        reactions AS total
+        reactions AS total,
+        file_size
     FROM messages
     WHERE is_invalid = 0 AND reactions > 0
 )
@@ -133,6 +134,7 @@ def find_reaction_messages_above_multiplier(
     limit: int = 200,
     source_id: int | None = None,
     channel_id: int | None = None,
+    file_size_limit: int | None = None,
 ) -> list[tuple]:
     """
     查询高反应消息
@@ -147,6 +149,7 @@ def find_reaction_messages_above_multiplier(
         limit: 返回条数上限
         source_id: 可选，按来源频道ID过滤（转发来源）
         channel_id: 可选，按消息所在频道ID过滤（同步目标）
+        file_size_limit: 可选，文件大小限制(MB)，只返回小于该大小的消息
 
     Returns:
         [(message_id, total, source_id, views, media_group_id), ...]
@@ -182,6 +185,9 @@ def find_reaction_messages_above_multiplier(
     if source_id is not None:
         select_parts.append("AND source_id = ?")
         select_params.append(source_id)
+    if file_size_limit is not None:
+        select_parts.append("AND file_size < ?")
+        select_params.append(file_size_limit * 1024 * 1024)
     select_parts.append("ORDER BY total DESC")
     if limit is not None:
         select_parts.append("LIMIT ?")
@@ -278,6 +284,7 @@ def find_messages_by_views_multiplier(
     limit: int = 100,
     source_id: int | None = None,
     channel_id: int | None = None,
+    file_size_limit: int | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """
     查询高浏览量消息
@@ -292,6 +299,7 @@ def find_messages_by_views_multiplier(
         limit: 返回条数上限
         source_id: 可选，按来源频道ID过滤（转发来源）
         channel_id: 可选，按消息所在频道ID过滤（同步目标）
+        file_size_limit: 可选，文件大小限制(MB)，只返回小于该大小的消息
 
     Returns:
         [(message_id, views, source_id, media_type), ...]
@@ -328,6 +336,9 @@ def find_messages_by_views_multiplier(
     if source_id is not None:
         select_query_parts.append("AND source_id = ?")
         select_params.append(source_id)
+    if file_size_limit is not None:
+        select_query_parts.append("AND file_size < ?")
+        select_params.append(file_size_limit * 1024 * 1024)
     select_query_parts.append("ORDER BY views DESC")
     cursor.execute(" ".join(select_query_parts), select_params)
 
@@ -463,6 +474,7 @@ def find_reaction_messages_for_display(
     reaction_limit: int = 200,
     source_id: int | None = None,
     channel_id: int | None = None,
+    file_size_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     统一的"高反应消息查询"逻辑（info.py 和 forward.py 共用）
@@ -478,6 +490,7 @@ def find_reaction_messages_for_display(
         reaction_limit: 高反应消息数量限制
         source_id: 可选，按来源频道ID过滤（用于 forward 模块指定源频道）
         channel_id: 可选，按消息所在频道ID过滤（同步目标）
+        file_size_limit: 可选，文件大小限制(MB)，只返回小于该大小的消息
 
     Returns:
         消息列表，每条消息包含 message_id, total, views, source_id, media_group_id
@@ -490,6 +503,7 @@ def find_reaction_messages_for_display(
         limit=reaction_limit,
         source_id=source_id,
         channel_id=channel_id,
+        file_size_limit=file_size_limit,
     )
     return [row_to_reaction_dict(row) for row in results]
 
@@ -500,6 +514,7 @@ def find_top_messages(
     views_limit: int = 100,
     source_id: int | None = None,
     channel_id: int | None = None,
+    file_size_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     统一的高反应+高浏览TOP查询（info.py 和 forward.py 共用）
@@ -510,6 +525,7 @@ def find_top_messages(
     3. 合并去重，reaction 优先
     4. 补充缺失字段（views, source_id, media_type）
     5. 标记 msg_type（high_reaction / high_views）
+    6. 文件大小过滤（file_size_limit MB）
 
     Args:
         conn: 数据库连接
@@ -517,6 +533,7 @@ def find_top_messages(
         views_limit: 高浏览量消息数量限制
         source_id: 可选，按消息来源频道ID过滤（转发来源）
         channel_id: 可选，按消息所在频道ID过滤（同步目标）
+        file_size_limit: 可选，文件大小限制(MB)，只返回小于该大小的消息
 
     Returns:
         消息列表，每条消息包含 message_id, total, views, source_id, media_group_id, msg_type
@@ -528,6 +545,7 @@ def find_top_messages(
         reaction_limit=reaction_limit,
         source_id=source_id,
         channel_id=channel_id,
+        file_size_limit=file_size_limit,
     )
     for msg in reaction_results:
         msg["msg_type"] = "high_reaction"
@@ -538,6 +556,7 @@ def find_top_messages(
         limit=views_limit,
         source_id=source_id,
         channel_id=channel_id,
+        file_size_limit=file_size_limit,
     )
     view_results = [
         {

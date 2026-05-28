@@ -555,7 +555,7 @@ def find_existing_export_dir(base_dir: Path, channel_title: str) -> Path | None:
     return None
 
 
-def run_export(channel_id: str | None = None, message_ids: list[int] | None = None, preview: bool = False) -> None:
+def run_export(channel_id: str | None = None, message_ids: list[int] | None = None, preview: bool = False, file_size_limit: int | None = None) -> None:
     """
     主导出流程
 
@@ -563,12 +563,14 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
         channel_id: 频道ID
         message_ids: 可选，指定要导出的消息ID列表
         preview: 是否开启预览确认模式
+        file_size_limit: 可选，文件大小限制(MB)，只导出小于该大小的消息
 
     优化点：
     1. 直接使用 get_chat_history 返回的 Message 对象下载媒体
     2. 避免额外的 API 调用导致的 PeerIdInvalid 错误
     3. 支持指定消息导出（用于断点续传）
     4. 支持预览确认模式 (-p 参数)
+    5. 支持文件大小过滤 (-l 参数)
     """
     # 加载配置
     config = get_config()
@@ -639,6 +641,7 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
                     reaction_limit=200,
                     views_limit=100,
                     channel_id=int(_channel_id),
+                    file_size_limit=file_size_limit,
                 )
 
                 if not messages:
@@ -837,7 +840,7 @@ def main():
             print(
                 f"[EXPORT] 开始导出频道: {channel_id}" + (f", 消息ID: {msg_ids}" if msg_ids else "")
             )
-            run_export(channel_id=channel_id, message_ids=msg_ids, preview=args.preview)
+            run_export(channel_id=channel_id, message_ids=msg_ids, preview=args.preview, file_size_limit=args.limit)
     except KeyboardInterrupt:
         print("\n[EXPORT] 用户中断导出，已保存当前进度，可重新运行继续")
         sys.exit(0)

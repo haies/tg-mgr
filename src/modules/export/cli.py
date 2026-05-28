@@ -23,6 +23,7 @@ def parse_export_args(args: list) -> argparse.Namespace:
         description="Telegram 频道导出工具", usage="./tg export [channel_id|message_url]..."
     )
     parser.add_argument("-p", "--preview", action="store_true", help="下载前预览并确认")
+    parser.add_argument("-l", "--limit", type=int, default=None, help="文件大小限制(MB)")
     parser.add_argument("channels", nargs="*", help="频道ID或消息地址，多个输入用空格分隔")
 
     parsed = parser.parse_args(args)
@@ -59,4 +60,4 @@ def parse_export_args(args: list) -> argparse.Namespace:
         if default_channel:
             channel_ids = [str(default_channel)]
 
-    return argparse.Namespace(channel_ids=channel_ids, message_ids=message_ids, preview=parsed.preview)
+    return argparse.Namespace(channel_ids=channel_ids, message_ids=message_ids, preview=parsed.preview, limit=parsed.limit)

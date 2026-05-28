@@ -139,6 +139,22 @@ class TestParseExportArgs:
         args = parse_export_args(['https://t.me/c/1234567890/456'])
         assert args.message_ids == [456]
 
+    def test_limit_argument_parsed(self):
+        """测试 -l 参数正确解析"""
+        args = parse_export_args(['-l', '500', '-1001234567890'])
+        assert args.limit == 500
+
+    def test_limit_argument_default_none(self):
+        """测试 -l 参数默认为 None"""
+        args = parse_export_args(['-1001234567890'])
+        assert args.limit is None
+
+    def test_preview_and_limit_together(self):
+        """测试 -p 和 -l 同时使用"""
+        args = parse_export_args(['-p', '-l', '500', '-1001234567890'])
+        assert args.preview is True
+        assert args.limit == 500
+
 
 class TestExportIncremental:
     """测试增量导出逻辑"""
