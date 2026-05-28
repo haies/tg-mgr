@@ -13,16 +13,57 @@ TG_MSG_LINK_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# 媒体组总大小阈值：小于100KB视为超小媒体组（垃圾消息判定用）
-JUNK_TINY_MEDIA_GROUP_THRESHOLD = 100 * 1024  # 100KB
+# 文件大小阈值：小于2MB视为小文件（垃圾消息判定用）
+JUNK_MEDIA_SIZE_THRESHOLD = 2 * 1024 * 1024  # 2MB
+
+# 媒体组总大小阈值：小于180KB视为超小媒体组
+JUNK_TINY_MEDIA_GROUP_THRESHOLD = 180 * 1024  # 180KB
+
+
+def count_chinese_chars(text: str) -> int:
+    """统计字符串中中文字符的数量"""
+    return sum(1 for char in text if '一' <= char <= '鿿')
 
 
 def is_junk_message(text: str, file_size: int | None = None, media_type: str | None = None) -> bool:
-    """判断单条媒体消息是否为垃圾
+    """判断消息是否为垃圾消息（旧版规则：长文字+小文件）
 
-    判定规则：
+    判定规则（同时满足）：
     - 媒体类型为 photo 或 video
-    - 文件大小小于 100KB
+    - 30字以上中文 或 100字符以上英文
+    - 文件大小小于 2MB
+    """
+    if not text:
+        return False
+
+    # 必须是有具体文字内容
+    stripped = text.strip()
+    links_only = TG_MSG_LINK_PATTERN.sub('', stripped).strip()
+    if links_only == '' and TG_MSG_LINK_PATTERN.search(stripped):
+        return False
+
+    # 规则：长文字
+    chinese_count = count_chinese_chars(text)
+    if not (chinese_count >= 30 or len(text) >= 100):
+        return False
+
+    # 规则：媒体类型必须为 photo 或 video
+    if media_type not in ('photo', 'video'):
+        return False
+
+    # 规则：文件大小必须小于 2MB
+    if file_size is not None and file_size >= JUNK_MEDIA_SIZE_THRESHOLD:
+        return False
+
+    return True
+
+
+def is_tiny_media_junk(file_size: int | None, media_type: str | None) -> bool:
+    """判断单条媒体消息是否为超小文件垃圾（简化版规则）
+
+    判定规则（同时满足）：
+    - 媒体类型为 photo 或 video
+    - 文件大小小于 100KB（不看文字）
     """
     if media_type not in ('photo', 'video'):
         return False
@@ -31,13 +72,34 @@ def is_junk_message(text: str, file_size: int | None = None, media_type: str | N
     return True
 
 
+def is_spam_text(text: str) -> bool:
+    """检测纯文字消息是否为垃圾
+
+    判定规则：
+    - 所有纯文字消息都算垃圾（不论长短）
+    - 排除仅包含 Telegram 消息链接的文字
+    """
+    if not text:
+        return False
+
+    # 排除仅包含链接的文字
+    stripped = text.strip()
+    links_only = TG_MSG_LINK_PATTERN.sub('', stripped).strip()
+    if links_only == '' and TG_MSG_LINK_PATTERN.search(stripped):
+        return False
+
+    # 所有非空的纯文字消息都算垃圾
+    return True
+
+
 def find_junk_messages(conn: sqlite3.Connection, channel_id: int | str | None = None) -> list:
     """查找所有垃圾消息（可按频道过滤）
 
     检测类型：
-    1. 单媒体（photo/video）+ 文件小于100KB（无文字或长文字均可）
-    2. 纯文字消息（去掉所有链接还有纯文字）
-    3. 媒体组总大小小于100KB
+    1. 单媒体（photo/video）+ 文件小于100KB（不看文字）
+    2. 媒体消息（photo/video）+ 长文字 + 文件小于2MB + 非媒体组成员
+    3. 纯文字消息（去除链接后非空）
+    4. 媒体组总大小小于100KB
 
     Args:
         conn: 数据库连接
@@ -45,7 +107,7 @@ def find_junk_messages(conn: sqlite3.Connection, channel_id: int | str | None = 
     """
     cursor = conn.cursor()
 
-    # 类型1：photo/video 媒体消息 + 长文字 + 文件小于100KB（不再限制媒体组）
+    # 类型1：photo/video + 文件小于100KB（简化版，不看文字）
     if channel_id is not None:
         cursor.execute("""
             SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
@@ -61,12 +123,50 @@ def find_junk_messages(conn: sqlite3.Connection, channel_id: int | str | None = 
             WHERE media_type IN ('photo', 'video')
             AND file_size < ?
         """, (JUNK_TINY_MEDIA_GROUP_THRESHOLD,))
+    tiny_media_junk = [msg for msg in cursor.fetchall() if is_tiny_media_junk(msg[2], msg[3])]
+
+    # 类型2：photo/video 媒体消息 + 长文字 + 文件小于2MB + 非媒体组（旧版规则）
+    if channel_id is not None:
+        cursor.execute("""
+            SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
+            FROM messages
+            WHERE media_type IN ('photo', 'video')
+            AND caption IS NOT NULL AND caption != ''
+            AND (media_group_id IS NULL OR media_group_id = '')
+            AND channel_id = ?
+        """, (channel_id,))
+    else:
+        cursor.execute("""
+            SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
+            FROM messages
+            WHERE media_type IN ('photo', 'video')
+            AND caption IS NOT NULL AND caption != ''
+            AND (media_group_id IS NULL OR media_group_id = '')
+        """)
     media_junk = [msg for msg in cursor.fetchall() if is_junk_message(msg[4], msg[2], msg[3])]
 
-    # 类型2：媒体组总大小小于100KB
+    # 类型3：纯文字消息
+    if channel_id is not None:
+        cursor.execute("""
+            SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
+            FROM messages
+            WHERE (media_type IS NULL OR media_type = 'text' OR media_type = '')
+            AND caption IS NOT NULL AND caption != ''
+            AND channel_id = ?
+        """, (channel_id,))
+    else:
+        cursor.execute("""
+            SELECT message_id, file_unique_id, file_size, media_type, caption, timestamp
+            FROM messages
+            WHERE (media_type IS NULL OR media_type = 'text' OR media_type = '')
+            AND caption IS NOT NULL AND caption != ''
+        """)
+    text_junk = [msg for msg in cursor.fetchall() if is_spam_text(msg[4])]
+
+    # 类型4：媒体组总大小小于100KB
     tiny_media_groups = _find_tiny_media_groups(conn, channel_id)
 
-    return media_junk + tiny_media_groups
+    return tiny_media_junk + media_junk + text_junk + tiny_media_groups
 
 
 def _find_tiny_media_groups(conn: sqlite3.Connection, channel_id: int | str | None = None) -> list:
