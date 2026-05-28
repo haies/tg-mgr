@@ -65,7 +65,7 @@ def run_deduplicate(delete: bool = False, channel_id: str | None = None) -> dict
     stats: dict[str, int] = {}
 
     with get_db() as conn:
-        duplicates = find_duplicates(conn)
+        duplicates = find_duplicates(conn, _channel_id)
 
         if not duplicates:
             print("[CLEAN] 未检测到重复媒体")

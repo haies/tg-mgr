@@ -226,7 +226,10 @@ def main():
                 # 同步到主数据库（与 info 保持一致）
                 print(f"[FORWARD] 同步频道 {channel_id}...")
                 try:
-                    sync_channel(channel_id=str(channel_id))
+                    sync_ok = sync_channel(channel_id=str(channel_id))
+                    if not sync_ok:
+                        print(f"[FORWARD] 同步失败（无法加入频道 {channel_id}）")
+                        continue
                 except Exception as e:
                     print(f"[FORWARD] 同步失败: {e}")
                     continue
@@ -259,7 +262,10 @@ def main():
                 all_messages = []
                 for ch_id in channel_ids:
                     try:
-                        sync_channel_for_forward(ch_id)
+                        sync_ok = sync_channel_for_forward(ch_id)
+                        if not sync_ok:
+                            print(f"[FORWARD] 同步频道 {ch_id} 失败（无法加入）")
+                            continue
                     except Exception as e:
                         print(f"[FORWARD] 同步频道 {ch_id} 失败: {e}")
                         continue

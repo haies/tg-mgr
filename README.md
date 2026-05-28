@@ -51,18 +51,14 @@ Get API credentials from https://my.telegram.org
 
 ### ~/.tg-mgr/config.json (Application Config)
 
-| Option | Default | Description |
-|--------|---------|-------------|
 | `channel_id` | null | Default channel ID |
-| `reaction_limit` | 200 | Max high-reaction messages (total > 6x channel avg) |
-| `views_limit` | 100 | Max high-views messages (views > 5x channel avg) |
-| `reaction_threshold_multiplier` | 6 | Reaction threshold multiplier |
-| `views_threshold_multiplier` | 5 | Views threshold multiplier |
+| `reaction_limit` | 200 | High-reaction result count limit |
+| `views_limit` | 100 | High-views result count limit |
 | `max_source_channels` | 10 | Max source channels for recursive forwarding |
-| `filter_min_size` | 1048576 (1MB) | Media size filter minimum |
-| `filter_max_size` | 1073741824 (1GB) | Media size filter maximum |
 | `download_dir` | ~/Downloads/Telegram | Media download directory |
 | `max_retries` | 5 | API max retries |
+| `retry_delay_base` | 1 | Base delay for exponential backoff (seconds) |
+| `recursion_depth` | null | Default recursion depth (null=disabled, >0=depth) |
 | `media_types` | all types | Supported media types |
 
 ## Usage
@@ -86,7 +82,6 @@ tg clean -di                      # Sync + deduplicate + cleanup invalid
 tg clean -dis                     # Sync + deduplicate + invalid + junk
 tg clean -y                       # Preview mode (list only, no delete)
 tg clean -R                       # Force reset database and re-sync
-tg clean -u                       # Force sync (breakpoint resume)
 tg clean <channel1> <channel2>    # Multi-channel cleanup
 ```
 
@@ -130,18 +125,16 @@ Features: Telegram Desktop format, media download, resume support, incremental e
 
 ```bash
 tg info                          # List all accessible channels
-tg info <channel_id>             # Analyze specific channel (from config if omitted)
+tg info <channel_id>             # Analyze specific channel
 tg info <channel_id> -R          # Force reset and re-sync
 tg info <channel_id> -l 20        # Top 20 high-reaction messages
 tg info <channel_id> -v 50       # Top 50 high-views messages
 ```
 
-**Channel Source:** When no channel is provided, reads from `TG_CHANNEL_ID` env var or `channel_id` in config.json. If neither set, lists all accessible channels.
-
 **Analysis Output:**
 - Forward sources: where messages are forwarded from (top N by message count)
-- High-views: messages with views > 5x channel average
-- High-reaction: messages with total (likes + hearts) > 6x channel average
+- High-views: messages with views > (0.8 × max + 0.2 × avg) OR views > 8 × avg (for views > 0)
+- High-reaction: messages with reactions > (0.8 × max + 0.2 × avg) OR reactions > 50 (for reactions ≥ 1)
 
 ---
 
@@ -178,7 +171,7 @@ tg forward https://t.me/c/1234567890/100 -o <target_channel>
 | Flag | Description | Default |
 |------|-------------|---------|
 | `channels` | Source channel ID(s) or message links | Required |
-| `-o, --target` | Target channel ID | Required |
+| `-o, --target` | Target channel ID (falls back to config's channel_id) | From config |
 | `-c, --check` | Check if message exists before forwarding | False |
 | `-r, --depth` | Recursion depth (None/0=disabled, >0=N layers) | From config (None) |
 | `-f, --force` | Force forward (download & re-upload) | False |
@@ -191,8 +184,8 @@ tg forward https://t.me/c/1234567890/100 -o <target_channel>
 - `-r N` (N>0) → Recurse N layers, discovering source channels at each level
 
 **Features:**
-- High-reaction filtering: total > 6x channel average
-- High-views filtering: views > 5x channel average
+- High-reaction filtering: reactions > (0.8 × max + 0.2 × avg) OR reactions > 50 (for reactions ≥ 1)
+- High-views filtering: views > (0.8 × max + 0.2 × avg) OR views > 8 × avg (for views > 0)
 - Media group support (bidirectional search)
 - Recursive depth forwarding (-r discovers source channels)
 - Force mode (-f downloads and re-uploads to bypass restrictions)
@@ -222,7 +215,7 @@ SQLite database at `~/.tg-mgr/tmp/database/messages.db`
 
 ```sql
 CREATE TABLE messages (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id INTEGER NOT NULL,
     file_unique_id TEXT NOT NULL,
     file_size INTEGER,
@@ -230,16 +223,19 @@ CREATE TABLE messages (
     caption TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_duplicate BOOLEAN DEFAULT 0,
-    is_valid BOOLEAN DEFAULT 1,
-    reactions TEXT DEFAULT '{"positive": 0, "heart": 0}',
+    is_invalid BOOLEAN DEFAULT 0,
+    is_junk BOOLEAN DEFAULT 0,
     source_id INTEGER,
     views INTEGER DEFAULT 0,
     media_group_id TEXT,
-    UNIQUE(message_id)
+    channel_id INTEGER,
+    media_group_size INTEGER DEFAULT 0,
+    reactions INTEGER DEFAULT 0,
+    UNIQUE(message_id, channel_id)
 );
 ```
 
-**Indexes:** file_unique_id, media_type, is_valid, is_duplicate, timestamp, message_id, reactions, file_size
+**Indexes:** idx_reactions, idx_file_size, idx_file_unique_id, idx_message_id, idx_timestamp, idx_channel_id, idx_media_group_id, idx_media_type, idx_is_invalid, idx_is_duplicate
 
 ---
 

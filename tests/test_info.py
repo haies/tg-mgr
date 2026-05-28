@@ -89,7 +89,7 @@ class TestAnalyzeChannel:
         with patch('modules.info.get_config') as mock_config, \
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
-             patch('modules.info.get_forward_sources') as mock_sources, \
+             patch('modules.info.find_forward_sources_by_channel') as mock_sources, \
              patch('modules.info.find_top_messages') as mock_top:
 
             mock_config.return_value = {
@@ -120,7 +120,7 @@ class TestAnalyzeChannel:
         with patch('modules.info.get_config') as mock_config, \
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
-             patch('modules.info.get_forward_sources') as mock_sources, \
+             patch('modules.info.find_forward_sources_by_channel') as mock_sources, \
              patch('modules.info.find_top_messages') as mock_top:
 
             mock_config.return_value = {
@@ -155,7 +155,7 @@ class TestAnalyzeChannel:
         with patch('modules.info.get_config') as mock_config, \
              patch('modules.sync.sync_channel') as mock_sync, \
              patch('modules.info.get_db') as mock_get_db, \
-             patch('modules.info.get_forward_sources') as mock_sources, \
+             patch('modules.info.find_forward_sources_by_channel') as mock_sources, \
              patch('modules.info.find_top_messages') as mock_top:
 
             mock_config.return_value = {

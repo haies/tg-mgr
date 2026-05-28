@@ -60,8 +60,8 @@ def main() -> None:
         print("[CLEAN] 错误：未指定频道ID，且配置文件中也未设置频道ID")
         return
 
-    # 判断是否需要执行sync（无清理参数时默认同步，或显式指定-u）
-    should_sync = not args.d and not args.i and not args.s or args.u
+    # 有任何清理参数时默认同步
+    should_sync = args.d or args.i or args.s
 
     # dry_run 模式（-y）影响所有删除操作
     dry_run = args.y

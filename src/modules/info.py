@@ -6,7 +6,7 @@ from pyrogram import errors
 from database import get_db
 from database.query import (
     find_top_messages,
-    get_forward_sources,
+    find_forward_sources_by_channel,
 )
 from utils.telegram_client import DEFAULT_CONFIG, get_client, get_config
 from utils.telegram_link import get_channel_address
@@ -49,9 +49,9 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None, views_li
         cursor.execute("SELECT id, title FROM channels")
         channel_cache = {row[0]: row[1] for row in cursor.fetchall()}
 
-        # 获取转发来源统计
-        forwarding_results = get_forward_sources(
-            conn, max_source_channels if max_source_channels != 0 else 9999
+        # 获取转发来源统计（按 channel_id 过滤）
+        forwarding_results = find_forward_sources_by_channel(
+            conn, channel_id, max_source_channels if max_source_channels not in (None, 0) else 9999
         )
 
         forward_sources = []
@@ -100,8 +100,10 @@ def analyze_channel(channel_id: int, reaction_limit: int | None = None, views_li
             if source["name"] is None:
                 source["name"] = channel_cache.get(source["id"], "无名")
 
-        # 统一查询高反应+高浏览量TOP消息
-        all_top_messages = find_top_messages(conn, reaction_limit=reaction_limit, views_limit=views_limit)
+        # 统一查询高反应+高浏览量TOP消息（按 channel_id 过滤）
+        # 注意：channel_id 是消息存储的目标频道，source_id 是转发来源
+        # 直接同步的消息 source_id=NULL，所以用 channel_id 过滤
+        all_top_messages = find_top_messages(conn, reaction_limit=reaction_limit, views_limit=views_limit, channel_id=channel_id)
 
         # 分离高反应和高浏览量消息（保持原有分开展示逻辑）
         reactions = [msg for msg in all_top_messages if msg.get("msg_type") == "high_reaction"]
@@ -127,26 +129,14 @@ def main():
 
     args = parser.parse_args()
 
-    # 确定频道列表
-    if args.channels:
-        # 命令行指定了频道
-        channels = args.channels
-    else:
-        # 未指定频道，尝试从配置读取
-        config = get_config()
-        channel_id = config.get("channel_id")
-        if channel_id:
-            channels = [channel_id]
-        else:
-            channels = None
-
-    if not channels:
+    # 无命令行参数时，列出所有可访问的会话
+    if not args.channels:
         # 无有效频道，列出所有可访问的会话
         for dialog in list_all_dialogs():
             print(f"{dialog['name']}\t{dialog['id']}\t{dialog['address']}")
     else:
         # 指定频道ID模式（使用第一个频道）
-        channel_id = channels[0]
+        channel_id = int(args.channels[0])
 
         # 强制重置模式：删除数据库并重新同步
         if args.reset:

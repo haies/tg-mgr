@@ -95,8 +95,8 @@ DEFAULT_CONFIG: dict = {
     # 转发相关
     "reaction_limit": 200,
     "views_limit": 100,
-    "reaction_threshold_multiplier": 6,  # 反应数 > 6 * 频道内平均反应数
-    "views_threshold_multiplier": 5,     # 浏览量 > 5 * 频道内平均浏览量
+    "reaction_threshold_multiplier": 5,  # 反应数 > 5 * 频道内平均反应数
+    "views_threshold_multiplier": 8,     # 浏览量 > 8 * 频道内平均浏览量
     "max_source_channels": 10,
     "recursion_depth": None,  # None=不递归，仅转发频道内消息
     # 清理相关

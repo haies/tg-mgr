@@ -30,8 +30,8 @@ def get_config():
     return forward_core.get_config()
 
 
-def sync_channel(channel_id):
-    return forward_core.sync_channel(channel_id)
+def sync_channel(channel_id, joined_channels=None):
+    return forward_core.sync_channel(channel_id, joined_channels=joined_channels)
 
 
 def find_messages_to_forward(conn, channel_id, reaction_limit=10, views_limit=50, filter_by_source=False):
@@ -42,16 +42,16 @@ def is_channel_forwarding_allowed(client, channel_id):
     return recursive.is_channel_forwarding_allowed(client, channel_id)
 
 
-def sync_channel_for_forward(channel_id: int) -> None:
-    return recursive.sync_channel_for_forward(channel_id)
+def sync_channel_for_forward(channel_id: int, joined_channels: set[int] | None = None) -> bool:
+    return recursive.sync_channel_for_forward(channel_id, joined_channels=joined_channels)
 
 
 def forward_messages_batch(source_channel_id, target_channel_ids, messages, check_exists=False, force=False):
     return send_module.forward_messages_batch(source_channel_id, target_channel_ids, messages, check_exists, force)
 
 
-def forward_with_recursion(source_channels, target_channel, current_depth=1, max_depth=None, processed_channels=None, check_exists=False, force=False, reaction_limit=10, views_limit=50, max_source_channels=10):
-    return recursive.forward_with_recursion(source_channels, target_channel, current_depth, max_depth, processed_channels, check_exists, force, reaction_limit, views_limit, max_source_channels)
+def forward_with_recursion(source_channels, target_channel, current_depth=1, max_depth=None, processed_channels=None, main_channel_id=None, check_exists=False, force=False, reaction_limit=10, views_limit=50, max_source_channels=10, joined_channels=None):
+    return recursive.forward_with_recursion(source_channels, target_channel, current_depth, max_depth, processed_channels, main_channel_id, check_exists, force, reaction_limit, views_limit, max_source_channels, joined_channels)
 
 
 # Wrap preview functions so patches on preview.* take effect
@@ -98,6 +98,16 @@ def _join_channel(client, channel_id: int) -> bool:
     return False
 
 
+def _leave_channel(client, channel_id: int) -> bool:
+    """尝试退出频道"""
+    from pyrogram import errors
+    try:
+        client.leave_chat(channel_id)
+        return True
+    except Exception:
+        return False
+
+
 def run_forward(args):
     """主导出流程"""
     config = get_config()
@@ -134,6 +144,9 @@ def run_forward(args):
             link_messages.append(parsed)
         else:
             channel_ids.append(parsed[0])
+
+    # 追踪自动加入的频道
+    joined_channels: set[int] = set()
 
     # 处理链接参数（直接转发，不递归）
     if link_messages:
@@ -219,7 +232,10 @@ def run_forward(args):
 
                 print(f"[FORWARD] 同步频道 {channel_id}...")
                 try:
-                    sync_channel(channel_id=str(channel_id))
+                    sync_ok = sync_channel(channel_id=str(channel_id), joined_channels=joined_channels)
+                    if not sync_ok:
+                        print(f"[FORWARD] 同步失败（无法加入频道 {channel_id}）")
+                        continue
                 except Exception as e:
                     print(f"[FORWARD] 同步失败: {e}")
                     continue
@@ -227,28 +243,34 @@ def run_forward(args):
                 with get_db() as conn:
                     messages = find_messages_to_forward(conn, channel_id, reaction_limit, views_limit, filter_by_source=False)
 
-                    if args.force and messages:
-                        summary = summarize_messages_for_forward(conn, messages)
-                        if not confirm_forward(messages, summary):
-                            print("[FORWARD] 已取消")
-                            return
-
                     if messages:
                         high_reaction_count = sum(1 for m in messages if m.get("msg_type") == "high_reaction")
                         high_views_count = sum(1 for m in messages if m.get("msg_type") == "high_views")
                         print(f"[FORWARD] 频道 {channel_id} 找到 {len(messages)} 条消息 (高反应: {high_reaction_count}, 高浏览: {high_views_count})")
+
+                        # -f 模式：先预览再确认
+                        if args.force:
+                            summary = summarize_messages_for_forward(conn, messages)
+                            if not confirm_forward(messages, summary):
+                                print("[FORWARD] 已取消")
+                                _leave_auto_joined_channels(joined_channels)
+                                return
                     else:
                         print(f"[FORWARD] 频道 {channel_id} 找到 0 条消息")
-                    if messages:
-                        f, s, fa = forward_messages_batch(channel_id, [target_channel_id], messages, args.check, args.force)
-                        print(f"[FORWARD] 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")
+                        continue
+
+                    f, s, fa = forward_messages_batch(channel_id, [target_channel_id], messages, args.check, args.force)
+                    print(f"[FORWARD] 完成: 转发 {f}, 跳过 {s}, 失败 {fa}")
         else:
             # 递归转发
             if args.force:
                 all_messages = []
                 for ch_id in channel_ids:
                     try:
-                        sync_channel_for_forward(ch_id)
+                        sync_ok = sync_channel_for_forward(ch_id, joined_channels=joined_channels)
+                        if not sync_ok:
+                            print(f"[FORWARD] 同步频道 {ch_id} 失败（无法加入）")
+                            continue
                     except Exception as e:
                         print(f"[FORWARD] 同步频道 {ch_id} 失败: {e}")
                         continue
@@ -260,6 +282,7 @@ def run_forward(args):
 
                 if not all_messages:
                     print("[FORWARD] 所有频道无可转发消息")
+                    _leave_auto_joined_channels(joined_channels)
                     return
 
                 summary = summarize_messages_for_forward(get_db(), all_messages)
@@ -269,6 +292,7 @@ def run_forward(args):
 
                 if not confirm_forward(all_messages, summary):
                     print("[FORWARD] 已取消")
+                    _leave_auto_joined_channels(joined_channels)
                     return
 
                 print("[FORWARD] 开始转发...")
@@ -284,14 +308,9 @@ def run_forward(args):
 
                 print("\n[FORWARD] ========== 全部完成 ==========")
                 print(f"[FORWARD] 总计: 转发 {total_f}, 跳过 {total_s}, 失败 {total_fa}")
-                return
             else:
+                # 递归转发：forward_with_recursion 内部会处理同步，不需要预同步
                 for ch_id in channel_ids:
-                    try:
-                        sync_channel_for_forward(ch_id)
-                    except Exception as e:
-                        print(f"[FORWARD] 同步频道 {ch_id} 失败: {e}")
-                        continue
                     processed_channels: set[int] = set()
                     nf, ns, nfa = forward_with_recursion(
                         source_channels=[ch_id],
@@ -304,6 +323,22 @@ def run_forward(args):
                         reaction_limit=reaction_limit,
                         views_limit=views_limit,
                         max_source_channels=default_max_source_channels,
+                        joined_channels=joined_channels,
                     )
                     print(f"[FORWARD] 频道 {ch_id} 递归转发完成: 转发 {nf}, 跳过 {ns}, 失败 {nfa}")
-                return
+
+    # 退出自动加入的频道
+    _leave_auto_joined_channels(joined_channels)
+
+
+def _leave_auto_joined_channels(joined_channels: set[int]) -> None:
+    """退出所有自动加入的频道"""
+    if not joined_channels:
+        return
+    print(f"[FORWARD] 退出自动加入的 {len(joined_channels)} 个频道...")
+    with get_client("tg-mgr") as client:
+        for ch_id in joined_channels:
+            if _leave_channel(client, ch_id):
+                print(f"[FORWARD] 已退出频道 {ch_id}")
+            else:
+                print(f"[FORWARD] 退出频道 {ch_id} 失败（可能已是成员或无权限）")
