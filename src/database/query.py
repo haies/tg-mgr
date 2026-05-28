@@ -571,6 +571,9 @@ def find_top_messages(
                 msg["views"] = views
         if "source_id" not in msg:
             msg["source_id"] = source_id_map.get(msg["message_id"]) or source_id
+        # 补充 channel_id（消息所在的频道，用于生成链接）
+        if channel_id is not None and "channel_id" not in msg:
+            msg["channel_id"] = channel_id
 
     return _deduplicate_media_groups(merged)
 

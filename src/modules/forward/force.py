@@ -1,5 +1,6 @@
 """转发强制模式模块 - 下载后重新上传"""
 import os
+import shutil
 import time
 from typing import Optional
 
@@ -15,6 +16,7 @@ from pyrogram.types import (
 )
 
 from utils.media import extract_reaction_data
+from utils.download import download_with_resume, DownloadOptions
 
 
 def _get_download_dir() -> str:
@@ -47,63 +49,8 @@ def _download_with_resume(client: Client, message: Message, target_path: str, ma
     Returns:
         下载完成的文件路径，失败返回 None
     """
-    # 获取文件信息
-    file_size = 0
-    if hasattr(message, 'video') and message.video:
-        file_size = message.video.file_size
-    elif hasattr(message, 'document') and message.document:
-        file_size = message.document.file_size
-    elif hasattr(message, 'photo') and message.photo:
-        file_size = getattr(message.photo, 'file_size', 0)
-    elif hasattr(message, 'audio') and message.audio:
-        file_size = message.audio.file_size
-    elif hasattr(message, 'animation') and message.animation:
-        file_size = message.animation.file_size
-
-    print(f"[DOWNLOAD] 文件大小: {file_size / 1024 / 1024:.1f} MB")
-
-    for attempt in range(max_retries):
-        try:
-            # 检查已下载的部分
-            downloaded_size = 0
-            if os.path.exists(target_path):
-                downloaded_size = os.path.getsize(target_path)
-                if downloaded_size >= file_size:
-                    print(f"[DOWNLOAD] 文件已完整下载: {downloaded_size} bytes")
-                    return target_path
-                print(f"[DOWNLOAD] 断点续传: 已下载 {downloaded_size / 1024 / 1024:.1f} MB，继续...")
-
-            # 使用 Pyrogram 的下载功能
-            # 添加进度回调
-            def progress(current, total):
-                if total > 0:
-                    pct = current / total * 100
-                    if current % (1024 * 1024 * 10) == 0:  # 每10MB打印一次
-                        print(f"[DOWNLOAD] 进度: {current / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB ({pct:.1f}%)")
-
-            result_path = client.download_media(
-                message,
-                file_name=target_path,
-                progress=progress
-            )
-
-            # 验证下载完整性
-            if result_path and os.path.exists(result_path):  # type: ignore[arg-type, union-attr]
-                final_size = os.path.getsize(result_path)  # type: ignore[arg-type, union-attr]
-                if file_size > 0 and final_size > 0 and final_size < file_size * 0.95:  # 允许5%误差
-                    print(f"[DOWNLOAD] 下载不完整: {final_size} / {file_size} bytes，重试...")
-                    continue
-                print(f"[DOWNLOAD] 下载完成: {final_size / 1024 / 1024:.1f} MB")
-                return result_path  # type: ignore[return-value]
-
-        except Exception as e:
-            print(f"[DOWNLOAD] 下载失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                print(f"[DOWNLOAD] 等待 {wait_time} 秒后重试...")
-                time.sleep(wait_time)
-
-    return None
+    options = DownloadOptions(max_retries=max_retries)
+    return download_with_resume(client, message, target_path, options)
 
 
 def _force_send_single_message(client: Client, target_channel_id: int, message: Message, download_dir: str | None = None) -> bool:

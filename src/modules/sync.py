@@ -89,6 +89,8 @@ def _sync_impl(_channel_id: str, _db_path: Path | None = None, joined_channels: 
         db_path = get_database_path()
 
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA busy_timeout = 30000")  # 30s timeout to avoid "database is locked"
+    conn.execute("PRAGMA journal_mode = WAL")  # write-ahead log for better concurrency
     try:
         # 执行 schema
         with open(schema_path) as f:

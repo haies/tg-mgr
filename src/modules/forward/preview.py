@@ -2,6 +2,8 @@
 import sqlite3
 from typing import Any
 
+from utils.telegram_link import generate_tg_link
+
 
 def _build_stats_str(total: int, views: int, is_media_group: bool = False) -> str:
     """构建统计信息字符串
@@ -113,9 +115,10 @@ def confirm_forward(
 
     # 显示消息列表预览
     print(f"\n[FORWARD] 待转发消息列表（共 {len(messages)} 条）：")
-    for i, msg in enumerate(messages[:20]):  # 限制显示20条
-        source_id = msg.get('source_id') or 0
-        link = f"https://t.me/c/{abs(source_id)}/{msg['message_id']}"
+    for i, msg in enumerate(messages):
+        # 优先使用 channel_id（消息所在频道），否则用 source_id（转发来源）
+        channel_id = msg.get('channel_id') or msg.get('source_id') or 0
+        link = generate_tg_link(channel_id, msg['message_id'])
         total = msg.get("total", 0)
         views = msg.get("views", 0)
         file_size = msg.get("file_size", 0)
@@ -128,9 +131,6 @@ def confirm_forward(
         size_str = f"{size_mb:.1f}MB" if size_mb > 0 else "无媒体"
         type_suffix = " [高反应]" if msg_type == "high_reaction" else " [高浏览量]" if msg_type == "high_views" else ""
         print(f"  {i+1}. {link} | {size_str}{group_suffix}{stats}{type_suffix}")
-
-    if len(messages) > 20:
-        print(f"  ... 还有 {len(messages) - 20} 条消息")
 
     print()
 

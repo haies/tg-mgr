@@ -6,12 +6,22 @@ import time
 from datetime import datetime
 from pathlib import Path
 from string import Template
+from typing import Any
 
 from pyrogram import Client, errors, types
 
+from database import get_db
+from database.query import find_top_messages
+from modules.sync import sync_channel
+from utils.download import download_with_resume, DownloadOptions
 from utils.file_sanitizer import sanitize_filename
 from utils.telegram_client import create_client, get_config
 from utils.telegram_link import generate_tg_link
+
+from modules.export.preview import (
+    summarize_messages_for_export as summarize_messages_for_forward,
+    confirm_export as confirm_export,
+)
 
 from .template import load_html_template
 
@@ -400,6 +410,139 @@ def update_message_with_download_path(msg_data: dict, download_path: str | None)
     return msg_data
 
 
+# ============ 导出下载（复用 forward 的下载逻辑）============
+def _download_messages_batch(
+    client,
+    channel_id: int,
+    messages: list[dict[str, Any]],
+    export_dir: Path,
+    state: "ExportState",
+) -> tuple[int, int, int]:
+    """批量下载消息媒体（与 forward -f 的下载逻辑完全一致）
+
+    Args:
+        client: Telegram 客户端
+        channel_id: 频道ID
+        messages: 消息列表
+        export_dir: 导出目录
+        state: 状态管理
+
+    Returns:
+        (downloaded, skipped, failed)
+    """
+    from modules.forward.send import _get_media_group_member_ids
+
+    downloaded = 0
+    skipped = 0
+    failed = 0
+
+    # 已处理的媒体组
+    processed_groups: set[str] = set()
+
+    for msg in messages:
+        msg_id = msg["message_id"]
+        db_media_group_id = msg.get("media_group_id")
+        msg["is_media_group"] = bool(db_media_group_id)
+
+        # 媒体组：只处理一次
+        if db_media_group_id and db_media_group_id in processed_groups:
+            skipped += 1
+            continue
+
+        file_size = msg.get("file_size", 0)
+        size_mb = file_size / 1024 / 1024 if file_size else 0
+
+        try:
+            if db_media_group_id:
+                # 媒体组：从数据库获取所有成员
+                with get_db() as conn:
+                    member_ids = _get_media_group_member_ids(conn, channel_id, db_media_group_id)
+
+                if len(member_ids) >= 2:
+                    # 完整媒体组，逐个下载
+                    media_group_msgs = client.get_messages(channel_id, member_ids)
+                    for gm in media_group_msgs:
+                        if gm:
+                            dl_path = _download_single_media(client, gm, export_dir, state)
+                            if dl_path:
+                                downloaded += 1
+                            time.sleep(0.1)
+                    processed_groups.add(db_media_group_id)
+                    link = generate_tg_link(channel_id, msg_id)
+                    print(f"[EXPORT] 下载成功: {link} ({size_mb:.1f}MB, 媒体组)")
+                    continue
+                elif len(member_ids) == 1:
+                    # 只有一个成员，当作普通消息处理
+                    pass
+                else:
+                    # 没有成员，可能是数据不一致，当作普通消息处理
+                    pass
+
+            # 单条消息下载
+            fetched = client.get_messages(channel_id, msg_id)
+            if fetched:
+                dl_path = _download_single_media(client, fetched, export_dir, state)
+                if dl_path:
+                    downloaded += 1
+                    link = generate_tg_link(channel_id, msg_id)
+                    print(f"[EXPORT] 下载成功: {link} ({size_mb:.1f}MB)")
+            else:
+                failed += 1
+                print(f"[EXPORT] 获取消息 {msg_id} 失败")
+        except Exception as e:
+            failed += 1
+            print(f"[EXPORT] 下载失败 message {msg_id}: {e}")
+
+    return downloaded, skipped, failed
+
+
+def _download_single_media(
+    client,
+    message,
+    export_dir: Path,
+    state: "ExportState",
+) -> str | None:
+    """下载单条媒体消息
+
+    Args:
+        client: Telegram 客户端
+        message: 消息对象
+        export_dir: 导出目录
+        state: 状态管理
+
+    Returns:
+        下载完成的文件路径，失败返回 None
+    """
+    try:
+        from utils.download import download_with_resume, DownloadOptions
+
+        # 生成文件名
+        ext = ""
+        if message.video:
+            ext = ".mp4"
+        elif message.document:
+            ext = Path(message.document.file_name).suffix if message.document.file_name else ""
+        elif message.photo:
+            ext = ".jpg"
+        elif message.audio:
+            ext = ".mp3"
+        elif message.animation:
+            ext = ".gif"
+
+        filename = f"media_{message.chat.id}_{message.id}{ext}"
+        target_path = str(export_dir / filename)
+
+        options = DownloadOptions(max_retries=3)
+        result = download_with_resume(client, message, target_path, options)
+
+        if result:
+            state.mark_message_processed(message.id)
+        return result
+    except Exception as e:
+        print(f"[EXPORT] 下载媒体失败: {e}")
+        return None
+
+
 # ============ 主导出流程 ============
 def find_existing_export_dir(base_dir: Path, channel_title: str) -> Path | None:
     """查找已存在的导出目录"""
@@ -412,18 +555,20 @@ def find_existing_export_dir(base_dir: Path, channel_title: str) -> Path | None:
     return None
 
 
-def run_export(channel_id: str | None = None, message_ids: list[int] | None = None) -> None:
+def run_export(channel_id: str | None = None, message_ids: list[int] | None = None, preview: bool = False) -> None:
     """
     主导出流程
 
     Args:
         channel_id: 频道ID
         message_ids: 可选，指定要导出的消息ID列表
+        preview: 是否开启预览确认模式
 
     优化点：
     1. 直接使用 get_chat_history 返回的 Message 对象下载媒体
     2. 避免额外的 API 调用导致的 PeerIdInvalid 错误
     3. 支持指定消息导出（用于断点续传）
+    4. 支持预览确认模式 (-p 参数)
     """
     # 加载配置
     config = get_config()
@@ -436,6 +581,11 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
         sys.exit(1)
 
     print(f"[EXPORT] 开始导出频道: {_channel_id}")
+
+    # 预览模式：先同步到 DB（与 forward -f 完全一致，在客户端启动前执行）
+    if preview:
+        print(f"[EXPORT] 同步频道 {_channel_id} 到数据库...")
+        sync_channel(str(_channel_id))
 
     # 创建 Telegram 客户端（使用统一的客户端工具）
     client, is_started = create_client(config, session_name="tg-mgr")
@@ -479,6 +629,37 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
 
         # 初始化状态管理
         state = ExportState(export_dir)
+
+        # 预览模式：从数据库查询（sync_channel 已在客户端启动前执行）
+        if preview:
+            # 从数据库查询消息（与 forward -f 完全一致）
+            with get_db() as conn:
+                messages = find_top_messages(
+                    conn,
+                    reaction_limit=200,
+                    views_limit=100,
+                    channel_id=int(_channel_id),
+                )
+
+                if not messages:
+                    print("[EXPORT] 数据库中无消息")
+                    return
+
+                # 预览统计（复用 forward 的函数）
+                summary = summarize_messages_for_forward(conn, messages)
+                print(f"[EXPORT] 预览模式：共 {len(messages)} 条消息")
+                if not confirm_export(messages, summary):
+                    print("[EXPORT] 已取消")
+                    return
+
+            # 下载媒体（复用 forward 的下载逻辑）
+            print("[EXPORT] 开始下载媒体...")
+            _download_messages_batch(client, int(_channel_id), messages, export_dir, state)
+
+            print(f"[EXPORT] 媒体下载完成")
+            print("[EXPORT] 导出完成！")
+            print(f"  - 导出目录: {export_dir}")
+            return
 
         # 收集所有消息
         messages = []
@@ -656,7 +837,7 @@ def main():
             print(
                 f"[EXPORT] 开始导出频道: {channel_id}" + (f", 消息ID: {msg_ids}" if msg_ids else "")
             )
-            run_export(channel_id=channel_id, message_ids=msg_ids)
+            run_export(channel_id=channel_id, message_ids=msg_ids, preview=args.preview)
     except KeyboardInterrupt:
         print("\n[EXPORT] 用户中断导出，已保存当前进度，可重新运行继续")
         sys.exit(0)

@@ -75,7 +75,9 @@ def get_schema_path() -> Path:
 
 def get_db_connection() -> sqlite3.Connection:
     """创建并返回数据库连接"""
-    return sqlite3.connect(str(get_database_path()))
+    conn = sqlite3.connect(str(get_database_path()))
+    conn.execute("PRAGMA busy_timeout = 30000")
+    return conn
 
 
 @contextmanager
