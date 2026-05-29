@@ -787,34 +787,43 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
                 f"[EXPORT] 消息处理完成: 总计 {total_count} 条, 跳过 {skipped_count} 条, 成功 {downloaded_count} 条, 失败 {failed_count} 条"
             )
 
-            # 导出 JSON
+            # 增量同步：读取已有消息，与新消息合并后重写
             json_path = export_dir / "messages.json"
+            existing_messages = []
 
-            # 如果已有 JSON，合并
             if json_path.exists():
-                print("[EXPORT] 发现已有 JSON，正在合并...")
                 try:
                     with open(json_path, encoding="utf-8") as f:
                         existing_data = json.load(f)
                     existing_messages = (
-                        existing_data.get("chats", {}).get("list", [{}])[0].get("messages", [])
+                        existing_data.get("chats", {})
+                        .get("list", [{}])[0]
+                        .get("messages", [])
                     )
+                    print(f"[EXPORT] 发现已有 JSON，包含 {len(existing_messages)} 条消息")
+                except (json.JSONDecodeError, ValueError, OSError, KeyError, IndexError) as e:
+                    print(f"  [WARNING] 读取已有 JSON 失败: {e}，将创建新文件")
+                    existing_messages = []
 
-                    existing_ids = {m["id"] for m in existing_messages}
-                    for msg in messages:
-                        if msg["id"] not in existing_ids:
-                            existing_messages.append(msg)
+            # 按 id 去重后合并
+            existing_ids = {m["id"] for m in existing_messages}
+            new_messages = [msg for msg in messages if msg["id"] not in existing_ids]
 
-                    existing_messages.sort(key=lambda m: m["id"])
-                    messages = existing_messages
-                except Exception as e:
-                    print(f"  [WARNING] 合并 JSON 失败: {e}")
+            if new_messages:
+                print(f"[EXPORT] 新增 {len(new_messages)} 条消息")
+                existing_messages.extend(new_messages)
+            else:
+                print(f"[EXPORT] 无新消息需要添加")
 
-            export_json_telegram_desktop_format(messages, channel_info, json_path)
+            # 按 id 排序
+            existing_messages.sort(key=lambda m: m["id"])
+
+            # 导出 JSON
+            export_json_telegram_desktop_format(existing_messages, channel_info, json_path)
 
             # 导出 HTML
             html_path = export_dir / "messages.html"
-            export_html_telegram_desktop_style(messages, channel_info, html_path)
+            export_html_telegram_desktop_style(existing_messages, channel_info, html_path)
 
             print("[EXPORT] 导出完成！")
             print(f"  - 导出目录: {export_dir}")
