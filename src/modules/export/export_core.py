@@ -616,16 +616,13 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
         base_download_dir = Path(config.get("download_dir", "~/Downloads/Telegram")).expanduser()
         base_download_dir.mkdir(parents=True, exist_ok=True)
 
-        # 查找已存在的导出目录
-        existing_dir = find_existing_export_dir(base_download_dir, channel_info["title"])
+        # 使用频道名称作为目录名（无时间戳，支持重复运行定位同一目录）
+        safe_title = sanitize_filename(channel_info["title"])
+        export_dir = base_download_dir / safe_title
 
-        if existing_dir:
-            export_dir = existing_dir
+        if export_dir.exists():
             print(f"[EXPORT] 找到已有导出目录，将继续导出: {export_dir}")
         else:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            safe_title = sanitize_filename(channel_info["title"])
-            export_dir = base_download_dir / f"{safe_title}_{timestamp}"
             export_dir.mkdir(parents=True, exist_ok=True)
             print(f"[EXPORT] 创建新导出目录: {export_dir}")
 
