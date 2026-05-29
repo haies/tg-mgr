@@ -115,9 +115,23 @@ tg export                                  # Default channel
 tg export <channel_id>                     # Single channel
 tg export <channel1> <channel2>           # Multiple channels
 tg export https://t.me/c/1234567890/100    # From message URL
+tg export <channel_id> -p                  # Preview and confirm before download
+tg export <channel_id> -l 50              # Only download files under 50MB
 ```
 
-Features: Telegram Desktop format, media download, resume support, incremental export
+**Features:**
+- Telegram Desktop format (JSON + HTML with media)
+- Incremental export: repeat runs find the same directory and skip existing files
+- Media deduplication based on actual filesystem (not state cache)
+- New messages append to existing JSON/HTML, existing entries preserved
+- Resume support: interrupted exports can continue from where they left off
+- Preview mode (-p): show stats and confirm before downloading
+- File size filter (-l): only download files under specified size
+
+**Incremental Behavior:**
+- Directory naming: `ChannelTitle/` (no timestamp) — repeat runs reuse same directory
+- Media skip: checks if file already exists on disk before downloading
+- JSON merge: new messages append to existing file, duplicates by message ID
 
 ---
 
