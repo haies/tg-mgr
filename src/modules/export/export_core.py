@@ -262,6 +262,7 @@ def download_media_from_message(
             return existing_path
         # state 有记录但文件已删除 — 删除 stale 记录
         del state.state["downloaded_files"][file_unique_id]
+        state.save()  # 保存删除操作
 
     # 如果文件实际存在但不在 state 中，补录 state 记录
     if not existing_path:
