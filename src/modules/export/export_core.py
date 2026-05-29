@@ -253,13 +253,27 @@ def download_media_from_message(
     else:
         return None  # 非媒体消息
 
-    # 检查是否已下载
+    # 增量下载：先查 state 记录，再验证实际文件（文件系统为权威依据）
     existing_path = state.is_file_downloaded(file_unique_id)
     if existing_path:
         full_path = export_dir / existing_path
         if full_path.exists() and full_path.stat().st_size > 0:
             print(f"  [SKIP] 文件已存在: {existing_path}")
             return existing_path
+        # state 有记录但文件已删除 — 删除 stale 记录
+        del state.state["downloaded_files"][file_unique_id]
+
+    # 如果文件实际存在但不在 state 中，补录 state 记录
+    if not existing_path:
+        for media_subdir in ["photos", "videos", "files", "voice", "video_notes", "stickers"]:
+            potential_path = export_dir / media_subdir
+            if potential_path.exists():
+                for f in potential_path.iterdir():
+                    if str(message.id) in f.name and f.stat().st_size > 0:
+                        rel = f"{media_subdir}/{f.name}"
+                        state.mark_file_downloaded(file_unique_id, rel)
+                        print(f"  [SKIP] 文件已存在（来自目录扫描）: {rel}")
+                        return rel
 
     # 确定保存路径
     media_dir = export_dir / media_type
@@ -531,6 +545,11 @@ def _download_single_media(
 
         filename = f"media_{message.chat.id}_{message.id}{ext}"
         target_path = str(export_dir / filename)
+
+        # 增量下载：检查文件是否已存在
+        if Path(target_path).exists() and Path(target_path).stat().st_size > 0:
+            print(f"  [SKIP] 文件已存在: {filename}")
+            return target_path
 
         options = DownloadOptions(max_retries=3)
         result = download_with_resume(client, message, target_path, options)
