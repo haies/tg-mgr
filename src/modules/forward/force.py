@@ -17,14 +17,23 @@ from pyrogram.types import (
 
 from utils.media import extract_reaction_data
 from utils.download import download_with_resume, DownloadOptions
+from utils.telegram_client import get_download_dir
 
 
-def _get_download_dir() -> str:
-    """获取下载目录，默认为 ~/.tg-mgr/downloads/"""
-    config_dir = os.path.expanduser("~/.tg-mgr")
-    download_dir = os.path.join(config_dir, "downloads")
-    os.makedirs(download_dir, exist_ok=True)
-    return download_dir
+# force forwarding 的中间文件放在 download_dir/force_cache/ 下，
+# 与 export 写入的 {download_dir}/{channel_name}/ 隔离
+FORCE_CACHE_SUBDIR = "force_cache"
+
+
+def _get_force_cache_dir() -> str:
+    """获取 force forwarding 临时下载目录：{download_dir}/force_cache/
+
+    与 export 的最终媒体分开，避免 export 的 skip 扫描把 force 的中间文件
+    当作已下载内容。
+    """
+    cache_dir = get_download_dir() / FORCE_CACHE_SUBDIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return str(cache_dir)
 
 
 def _get_reaction_total(message: Message) -> int:
@@ -62,7 +71,7 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
         client: Telegram 客户端
         target_channel_id: 目标频道ID
         message: 源消息
-        download_dir: 下载目录，默认为 ~/.tg-mgr/downloads/
+        download_dir: 下载目录，默认为 {download_dir}/force_cache/
 
     Returns:
         True if successful, False otherwise
@@ -72,7 +81,7 @@ def _force_send_single_message(client: Client, target_channel_id: int, message: 
 
         # 确定下载目录
         if download_dir is None:
-            download_dir = _get_download_dir()
+            download_dir = _get_force_cache_dir()
 
         # 生成临时文件路径
         # 根据媒体类型确定扩展名
@@ -151,7 +160,7 @@ def _force_send_media_group(
         client: Telegram 客户端
         target_channel_id: 目标频道ID
         messages: 媒体组消息列表（按 message_id 排序），可以是 Message 对象列表或 message_id 列表
-        download_dir: 下载目录，默认为 ~/.tg-mgr/downloads/
+        download_dir: 下载目录，默认为 {download_dir}/force_cache/
         source_channel_id: 源频道ID（当 messages 是 message_id 列表时必须提供）
 
     Returns:
@@ -164,7 +173,7 @@ def _force_send_media_group(
 
     # 确定下载目录
     if download_dir is None:
-        download_dir = _get_download_dir()
+        download_dir = _get_force_cache_dir()
 
     # 如果传入的是 message_id 列表，需要先获取 Message 对象
     if messages and isinstance(messages[0], int):

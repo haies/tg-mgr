@@ -55,7 +55,7 @@ Get API credentials from https://my.telegram.org
 | `reaction_limit` | 200 | High-reaction result count limit |
 | `views_limit` | 100 | High-views result count limit |
 | `max_source_channels` | 10 | Max source channels for recursive forwarding |
-| `download_dir` | ~/Downloads/Telegram | Media download directory |
+| `download_dir` | ~/Downloads/Telegram | Media download directory (export → `{dir}/{channel_name}/{type}/`, force forwarding → `{dir}/force_cache/`) |
 | `max_retries` | 5 | API max retries |
 | `retry_delay_base` | 1 | Base delay for exponential backoff (seconds) |
 | `recursion_depth` | null | Default recursion depth (null=disabled, >0=depth) |

@@ -15,7 +15,7 @@ from database.query import find_top_messages
 from modules.sync import sync_channel
 from utils.download import download_with_resume, DownloadOptions
 from utils.file_sanitizer import sanitize_filename
-from utils.telegram_client import create_client, get_config
+from utils.telegram_client import create_client, get_config, get_download_dir
 from utils.telegram_link import generate_tg_link
 
 from modules.export.preview import (
@@ -632,8 +632,8 @@ def run_export(channel_id: str | None = None, message_ids: list[int] | None = No
 
         print(f"[EXPORT] 频道名称: {channel_info['title']}")
 
-        # 确定导出目录
-        base_download_dir = Path(config.get("download_dir", "~/Downloads/Telegram")).expanduser()
+        # 确定导出目录（统一从配置读取，DEFAULT_CONFIG 提供兜底）
+        base_download_dir = get_download_dir()
         base_download_dir.mkdir(parents=True, exist_ok=True)
 
         # 使用频道名称作为目录名（无时间戳，支持重复运行定位同一目录）

@@ -115,6 +115,27 @@ def get_project_tmp_dir() -> Path:
     return get_config_dir() / "tmp"
 
 
+def get_download_dir() -> Path:
+    """获取下载根目录（来自 config.json 的 download_dir，自动 expanduser）
+
+    这是所有下载操作的统一入口：
+    - export 把频道媒体写入 {download_dir}/{channel_name}/{media_type}/
+    - force forwarding 把中间文件写入 {download_dir}/force_cache/
+
+    配置文件示例:
+        {"download_dir": "~/Downloads/Telegram"}
+
+    Returns:
+        已 expanduser 的 Path 对象
+    """
+    raw = get_config_value("download_dir")
+    if not raw:
+        raise ValueError(
+            "download_dir 未配置，请在 ~/.tg-mgr/config.json 中设置 download_dir"
+        )
+    return Path(raw).expanduser()
+
+
 def get_sessions_dir() -> Path:
     """获取 sessions 目录路径"""
     sessions_dir = get_project_tmp_dir() / "sessions"
