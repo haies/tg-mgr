@@ -30,6 +30,9 @@ docs/
 .env.local
 .env.*.local
 
+# Local config (use config.example.json as template)
+config.json
+
 # ===========================================
 # Session files
 # ===========================================
